@@ -1,0 +1,9 @@
+An Android visual novel reader purpose-built for e-ink devices, reading the classic VNDS (.scr) script format used by the original Nintendo DS "VNDS" engine, as well as (with more limited support) the NScripter/ONScripter script format. Every part of the UI is designed around e-ink's constraints: no animations by default, instant image/text swaps, a forced light theme, and grayscale-friendly rendering.
+
+Features:
+
+Manual typewriter text reveal and auto-advance, both with configurable speed. 24 manual save slots plus an always-current auto-managed "Resume" slot. A Variables inspector to view and edit script variables live, mid-story. A full text-log backlog. Optional VNDB linking per novel for cover info, rating, and length. Import a story pack as a folder tree, a single VN's own folder, or a zip/7z archive. Structured, checkable completion guides (routes, choices, and endings) importable as JSON, plus a standalone Guides page for reference material about VNs you haven't imported.
+
+This build has no proprietary dependencies. A separate "full" build (source-available, not distributed here) adds hardware full-screen refresh support for Onyx/Boox e-ink devices via their proprietary SDK; that hardware isn't required, and everything else works identically without it.
+
+Not every NScripter/ONScripter novel is supported yet; see the project's README for details on what's covered.
