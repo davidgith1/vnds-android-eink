@@ -682,7 +682,7 @@ above. It does not include, bundle, or distribute source code from any other
 software project.
 
   * VNDS script format (`app/.../vnds/`): an independent implementation of the
-    `.scr` script format used by the original Java ME / PC "VNDS" engine,
+    `.scr` script format used by the original Nintendo DS "VNDS" engine,
     created by Jake Probst and anoNL and documented/hosted at Digital-Haze
     (digital-haze.net).
 

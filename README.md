@@ -1,7 +1,7 @@
 # VNDS Android E-ink
 
 An Android visual novel reader purpose-built for e-ink devices, reading the classic **VNDS**
-(`.scr`) script format used by the original Java ME / PC "VNDS" engine, as well as (with more
+(`.scr`) script format used by the original Nintendo DS "VNDS" engine, as well as (with more
 limited support, see [NScripter/ONScripter support](#nscripteronscripter-support)) the
 **NScripter/ONScripter** script format. Rather than embedding either of those engines, this app
 reimplements small interpreters for them from scratch, and every part of the UI is designed around
