@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/mainRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/eink_background">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@color/eink_background">
+
+            <TextView
+                android:id="@+id/titleView"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center_vertical"
+                android:paddingStart="16dp"
+                android:paddingEnd="8dp"
+                android:text="@string/app_name"
+                android:textColor="@color/eink_text"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/menuButton"
+                android:layout_width="56dp"
+                android:layout_height="match_parent"
+                android:background="@drawable/bg_library_item"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="@string/menu_dots"
+                android:textColor="@color/eink_text"
+                android:textSize="22sp" />
+        </LinearLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="2dp"
+            android:background="@color/eink_divider" />
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/recyclerView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clipToPadding="false"
+                android:paddingBottom="88dp" />
+        </FrameLayout>
+
+    </LinearLayout>
+
+    <!-- Instant-jump paging buttons (see Prefs#isPagedLibraryScroll): scrollBy, not smoothScrollBy,
+         so e-ink never has to redraw through an animated glide, same pattern SettingsDialog and
+         GuideDialog use for their own scroll areas. Fixed to the bottom-left corner, opposite
+         importButton; hidden unless the setting is on. -->
+    <LinearLayout
+        android:id="@+id/libraryScrollButtons"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|start"
+        android:layout_marginStart="16dp"
+        android:layout_marginBottom="16dp"
+        android:orientation="horizontal"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/libraryScrollUp"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="@drawable/bg_choice_button"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_scroll_up"
+            android:contentDescription="@string/settings_scroll_up_desc"
+            android:textColor="@color/choice_button_text"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/libraryScrollDown"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_choice_button"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:text="@string/settings_scroll_down"
+            android:contentDescription="@string/settings_scroll_down_desc"
+            android:textColor="@color/choice_button_text"
+            android:textSize="18sp" />
+
+    </LinearLayout>
+
+    <!-- Flat, bordered e-ink button (no elevation/ripple/shadow: a Material FAB's drop shadow
+         and press ripple would just be an unwanted animation on e-ink) fixed to the bottom-right
+         corner so importing is reachable regardless of list scroll position. -->
+    <TextView
+        android:id="@+id/importButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="16dp"
+        android:background="@drawable/bg_choice_button"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center"
+        android:text="@string/import_novel"
+        android:textColor="@color/choice_button_text"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+    <!-- Invisible full-screen tap-catcher shown only while the overflow menu is open, so tapping
+         anywhere outside it closes it (a plain visibility toggle has no such behavior for free). -->
+    <View
+        android:id="@+id/menuScrim"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clickable="true"
+        android:focusable="true"
+        android:visibility="gone" />
+
+    <!-- Custom overflow panel: plain visibility toggle, no PopupWindow/animation involved.
+         Padding equal to the background's stroke width keeps the border fully visible as a
+         proper enclosing box: without it, the full-width rows below paint straight over the
+         left/right edges of the stroke, leaving only a top/bottom sliver that reads as "no border". -->
+    <LinearLayout
+        android:id="@+id/menuPanel"
+        android:layout_width="240dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="58dp"
+        android:layout_marginEnd="8dp"
+        android:orientation="vertical"
+        android:padding="2dp"
+        android:background="@drawable/bg_menu_panel"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/menuSettings"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_library_item"
+            android:padding="16dp"
+            android:text="@string/settings"
+            android:textColor="@color/eink_text"
+            android:textSize="16sp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/eink_divider" />
+
+        <TextView
+            android:id="@+id/menuGuideLibrary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_library_item"
+            android:padding="16dp"
+            android:text="@string/guide_library_menu_item"
+            android:textColor="@color/eink_text"
+            android:textSize="16sp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/eink_divider" />
+
+        <TextView
+            android:id="@+id/menuQuit"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_library_item"
+            android:padding="16dp"
+            android:text="@string/quit"
+            android:textColor="@color/eink_text"
+            android:textSize="16sp" />
+    </LinearLayout>
+
+</FrameLayout>

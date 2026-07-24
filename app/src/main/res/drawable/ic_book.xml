@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generic "novel" icon shown for every library entry, replacing the old per-VN screenshot
+     thumbnail (which could be color and clashed with the e-ink pure black/white palette). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M4,4.5C4,3.67 4.67,3 5.5,3H11v18H5.5C4.67,21 4,20.33 4,19.5V4.5Z" />
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M13,3h5.5C19.33,3 20,3.67 20,4.5v15c0,0.83 -0.67,1.5 -1.5,1.5H13V3Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M6,6h3v1.4H6z M6,9h3v1.4H6z M15,6h3v1.4h-3z M15,9h3v1.4h-3z" />
+</vector>

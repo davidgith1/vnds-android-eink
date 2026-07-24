@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Small bordered square button (delete glyph, etc.): same flat, non-animated pressed-state
+     swap as bg_choice_button, but without its baked-in padding, which is too large for a
+     compact icon-sized button. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/eink_text" />
+            <stroke android:width="2dp" android:color="@color/eink_text" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/eink_background" />
+            <stroke android:width="2dp" android:color="@color/eink_text" />
+        </shape>
+    </item>
+</selector>

@@ -1,0 +1,422 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/readerRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/eink_background">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@color/eink_background">
+
+            <TextView
+                android:id="@+id/titleView"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center_vertical"
+                android:paddingStart="16dp"
+                android:paddingEnd="8dp"
+                android:singleLine="true"
+                android:ellipsize="end"
+                android:textColor="@color/eink_text"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/menuButton"
+                android:layout_width="56dp"
+                android:layout_height="match_parent"
+                android:background="@drawable/bg_library_item"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="@string/menu_dots"
+                android:textColor="@color/eink_text"
+                android:textSize="22sp" />
+        </LinearLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="2dp"
+            android:background="@color/eink_divider" />
+
+        <!--
+          Height is set programmatically from the VN's img.ini aspect ratio (ReaderActivity#
+          applySceneAspect), so it exactly matches the rendered image with no letterboxing,
+          and stays constant for the whole novel. The text panel below then gets 100% of
+          whatever vertical space is left.
+        -->
+        <FrameLayout
+            android:id="@+id/sceneContainer"
+            android:layout_width="match_parent"
+            android:layout_height="240dp"
+            android:background="@color/eink_background">
+
+            <ImageView
+                android:id="@+id/backgroundImage"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@android:color/black"
+                android:scaleType="fitCenter"
+                android:contentDescription="@null" />
+
+            <FrameLayout
+                android:id="@+id/spriteLayer"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <!-- Tap anywhere in the scene to advance the script. -->
+            <View
+                android:id="@+id/tapCatcher"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@android:color/transparent" />
+
+        </FrameLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="2dp"
+            android:background="@color/eink_divider" />
+
+        <!--
+          Takes up all remaining vertical space (see sceneContainer's comment above). Text
+          never scrolls here: ReaderActivity measures ahead of time and starts a fresh page
+          (clearing the box) instead of letting content overflow the available height.
+        -->
+        <LinearLayout
+            android:id="@+id/textPanel"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:background="@color/eink_background"
+            android:padding="16dp">
+
+            <TextView
+                android:id="@+id/speakerName"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="@color/eink_text"
+                android:textStyle="bold"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/bodyText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textColor="@color/eink_text"
+                android:textSize="18sp"
+                android:lineSpacingExtra="4dp" />
+
+        </LinearLayout>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="2dp"
+            android:background="@color/eink_divider" />
+
+        <!--
+          Explicit, always-in-the-same-place advance control (in addition to tap-anywhere),
+          plus Auto and Text log. All three hide/show together during choices (see
+          ReaderActivity#showChoices). Plain solid backgrounds, not the pressed-state selector
+          used elsewhere: advanceButton is tapped once per line of dialogue, so any visible
+          press feedback would mean a full e-ink refresh flash on every single tap.
+        -->
+        <LinearLayout
+            android:id="@+id/advanceBar"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:orientation="horizontal">
+
+            <!-- Fixed-width (not weighted like the rest of the bar): a quick-access shortcut for
+                 "Advance to next choice", already reachable from the hamburger menu too. -->
+            <TextView
+                android:id="@+id/btnAdvanceToChoice"
+                android:layout_width="40dp"
+                android:layout_height="match_parent"
+                android:background="@drawable/bg_library_item"
+                android:clickable="true"
+                android:contentDescription="@string/advance_to_choice_menu_item"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="@string/advance_to_choice_glyph"
+                android:textColor="@color/eink_text"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <View
+                android:layout_width="1dp"
+                android:layout_height="match_parent"
+                android:background="@color/eink_divider" />
+
+            <TextView
+                android:id="@+id/btnAuto"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:background="@drawable/bg_library_item"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="@string/auto_button"
+                android:textColor="@color/eink_text"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <View
+                android:layout_width="1dp"
+                android:layout_height="match_parent"
+                android:background="@color/eink_divider" />
+
+            <TextView
+                android:id="@+id/btnTextLog"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:background="@drawable/bg_library_item"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="@string/text_log_button"
+                android:textColor="@color/eink_text"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <View
+                android:id="@+id/btnGuideDivider"
+                android:layout_width="1dp"
+                android:layout_height="match_parent"
+                android:background="@color/eink_divider"
+                android:visibility="gone" />
+
+            <!-- Only shown if a completion guide has been imported for this VN; see
+                 ReaderActivity's GuideManager.hasGuide check. -->
+            <TextView
+                android:id="@+id/btnGuide"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:background="@drawable/bg_library_item"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="@string/view_guide"
+                android:textColor="@color/eink_text"
+                android:textSize="16sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
+
+            <View
+                android:layout_width="1dp"
+                android:layout_height="match_parent"
+                android:background="@color/eink_divider" />
+
+            <TextView
+                android:id="@+id/advanceButton"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:background="@color/eink_background"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center"
+                android:text="@string/advance_button"
+                android:textColor="@color/eink_text"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+    <!--
+      Choices float over the whole screen (image + text panel), not just the scene area,
+      so they read as the single focus of attention rather than a strip pinned to the image.
+    -->
+    <LinearLayout
+        android:id="@+id/choicesPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:layout_marginStart="24dp"
+        android:layout_marginEnd="24dp"
+        android:orientation="vertical"
+        android:padding="24dp"
+        android:background="@drawable/bg_menu_panel"
+        android:visibility="gone" />
+
+    <!-- Invisible full-screen tap-catcher shown only while the overflow menu is open, so tapping
+         anywhere outside it closes it (a plain visibility toggle has no such behavior for free). -->
+    <View
+        android:id="@+id/menuScrim"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:clickable="true"
+        android:focusable="true"
+        android:visibility="gone" />
+
+    <!-- Custom overflow panel: plain visibility toggle, no PopupWindow/animation involved.
+         Padding equal to the background's stroke width keeps the border fully visible as a
+         proper enclosing box: without it, the full-width rows below paint straight over the
+         left/right edges of the stroke, leaving only a top/bottom sliver that reads as "no border". -->
+    <LinearLayout
+        android:id="@+id/menuPanel"
+        android:layout_width="240dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="58dp"
+        android:layout_marginEnd="8dp"
+        android:orientation="vertical"
+        android:padding="1dp"
+        android:background="@drawable/bg_menu_popup"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/menuSave"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_library_item"
+            android:padding="16dp"
+            android:text="@string/save_progress"
+            android:textColor="@color/eink_text"
+            android:textSize="16sp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/eink_divider" />
+
+        <TextView
+            android:id="@+id/menuLoad"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_library_item"
+            android:padding="16dp"
+            android:text="@string/load_progress"
+            android:textColor="@color/eink_text"
+            android:textSize="16sp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/eink_divider" />
+
+        <TextView
+            android:id="@+id/menuAdvanceToChoice"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_library_item"
+            android:padding="16dp"
+            android:text="@string/advance_to_choice_menu_item"
+            android:textColor="@color/eink_text"
+            android:textSize="16sp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/eink_divider" />
+
+        <TextView
+            android:id="@+id/menuSettings"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_library_item"
+            android:padding="16dp"
+            android:text="@string/settings"
+            android:textColor="@color/eink_text"
+            android:textSize="16sp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/eink_divider" />
+
+        <TextView
+            android:id="@+id/menuVariables"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_library_item"
+            android:padding="16dp"
+            android:text="@string/variables_menu_item"
+            android:textColor="@color/eink_text"
+            android:textSize="16sp" />
+
+        <View
+            android:id="@+id/menuGuideDivider"
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/eink_divider" />
+
+        <!-- Only shown if a completion guide has been imported for this VN from the library;
+             see ReaderActivity's GuideManager.hasGuide check. -->
+        <TextView
+            android:id="@+id/menuGuide"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_library_item"
+            android:padding="16dp"
+            android:text="@string/view_guide"
+            android:textColor="@color/eink_text"
+            android:textSize="16sp" />
+
+        <View
+            android:id="@+id/menuRefreshDivider"
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/eink_divider" />
+
+        <!-- Onyx-only hardware feature (forces a full EPD flash); hidden entirely on other
+             devices, see ReaderActivity's einkRefreshSupported check. -->
+        <TextView
+            android:id="@+id/menuRefresh"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_library_item"
+            android:padding="16dp"
+            android:text="@string/refresh_screen"
+            android:textColor="@color/eink_text"
+            android:textSize="16sp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/eink_divider" />
+
+        <TextView
+            android:id="@+id/menuLibrary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_library_item"
+            android:padding="16dp"
+            android:text="@string/back_to_library"
+            android:textColor="@color/eink_text"
+            android:textSize="16sp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/eink_divider" />
+
+        <TextView
+            android:id="@+id/menuQuit"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_library_item"
+            android:padding="16dp"
+            android:text="@string/quit"
+            android:textColor="@color/eink_text"
+            android:textSize="16sp" />
+    </LinearLayout>
+
+</FrameLayout>

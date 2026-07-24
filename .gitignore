@@ -1,0 +1,31 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+.kotlin/
+
+# Local sample/test content used for manual testing during development -- not needed to build
+# or run the app, and not distributed with the repo.
+/VNDS Example/
+/Onscripter examples/
+/testScreenshots/
+/Examples/
+
+# Ad hoc local dev/debugging tooling, not part of the published app.
+/tools/
+
+# Editor / assistant local state.
+.claude/
+*.kate-swp
+/CLAUDE.md

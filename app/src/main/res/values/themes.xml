@@ -1,0 +1,46 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!--
+      E-ink reading app: a fixed light theme (not DayNight) so system dark mode can
+      never flip the UI to dark colors, plus window animations disabled so
+      activity/screen transitions don't trigger extra e-ink refreshes.
+    -->
+    <style name="Theme.VNDSAndroidEink" parent="Theme.MaterialComponents.Light.NoActionBar">
+        <item name="colorPrimary">@color/eink_background</item>
+        <item name="colorPrimaryVariant">@color/eink_background</item>
+        <item name="colorOnPrimary">@color/eink_text</item>
+        <item name="colorSecondary">@color/eink_text</item>
+        <item name="colorSecondaryVariant">@color/eink_text</item>
+        <item name="colorOnSecondary">@color/eink_background</item>
+        <item name="android:windowBackground">@color/eink_background</item>
+        <item name="android:statusBarColor">@color/eink_background</item>
+        <item name="android:windowLightStatusBar" tools:targetApi="23">true</item>
+        <item name="colorControlHighlight">@android:color/transparent</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowContentTransitions" tools:targetApi="21">false</item>
+        <item name="android:windowActivityTransitions" tools:targetApi="21">false</item>
+        <!-- Plain AlertDialog.Builder buttons (delete/overwrite confirmations, etc.) are tinted
+             from colorPrimary by default, which above is white: same as the dialog's own
+             background, so "Delete"/"Cancel" etc. rendered invisible. Override just for dialogs. -->
+        <item name="alertDialogTheme">@style/ThemeOverlay.VNDSAndroidEink.Dialog</item>
+        <item name="android:alertDialogTheme">@style/ThemeOverlay.VNDSAndroidEink.Dialog</item>
+    </style>
+
+    <style name="ThemeOverlay.VNDSAndroidEink.Dialog" parent="ThemeOverlay.MaterialComponents.Dialog.Alert">
+        <item name="colorPrimary">@color/eink_text</item>
+        <item name="colorOnSurface">@color/eink_text</item>
+        <item name="android:windowBackground">@color/eink_background</item>
+    </style>
+
+    <!-- For ConfirmDialog: a small centered popup with none of Material's chrome (rounded
+         corners, elevation/shadow, fade+scale enter/exit animation): the content view itself
+         supplies a flat bordered background, matching every other popup in the app. -->
+    <style name="Theme.VNDSAndroidEink.FlatDialog" parent="Theme.MaterialComponents.Light.Dialog.MinWidth">
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:windowContentTransitions" tools:targetApi="21">false</item>
+        <item name="android:windowActivityTransitions" tools:targetApi="21">false</item>
+    </style>
+</resources>

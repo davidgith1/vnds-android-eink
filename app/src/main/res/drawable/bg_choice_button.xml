@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Flat, non-animated pressed-state swap (no ripple) so e-ink screens don't ghost. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/eink_text" />
+            <stroke android:width="2dp" android:color="@color/eink_text" />
+            <padding android:left="16dp" android:top="12dp" android:right="16dp" android:bottom="12dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/eink_background" />
+            <stroke android:width="2dp" android:color="@color/eink_text" />
+            <padding android:left="16dp" android:top="12dp" android:right="16dp" android:bottom="12dp" />
+        </shape>
+    </item>
+</selector>
