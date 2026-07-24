@@ -682,17 +682,19 @@ above. It does not include, bundle, or distribute source code from any other
 software project.
 
   * VNDS script format (`app/.../vnds/`): an independent implementation of the
-    `.scr` script format used by the original Java ME / PC "VNDS" engine, based
-    on that format's public documentation by Digital-Haze.
+    `.scr` script format used by the original Java ME / PC "VNDS" engine,
+    created by Jake Probst and anoNL and documented/hosted at Digital-Haze
+    (digital-haze.net).
 
   * NScripter/ONScripter script format (`app/.../nscripter/`): an independent
-    implementation of the NScripter/ONScripter script format. During
-    development, the publicly available ONScripter-EN project (an open-source,
-    GPL v2-licensed engine, itself a derivative of Ogapee's original
-    NScripter/ONScripter) was consulted purely as a reference for real-world
-    command semantics, for interoperability with existing script packs. No
-    ONScripter-EN source code is copied into, linked against, or distributed
-    with this repository.
+    implementation of the NScripter/ONScripter script format -- NScripter
+    itself a closed-source engine by Naoki Takahashi, and ONScripter an
+    open-source clone of it by Ogapee, from which the ONScripter-EN project
+    (open-source, GPL v2-licensed) descends. During development, ONScripter-EN's
+    publicly available source was consulted purely as a reference for
+    real-world command semantics, for interoperability with existing script
+    packs. No ONScripter-EN source code is copied into, linked against, or
+    distributed with this repository.
 
 Story packs, save data, completion guides, or any other content you import
 into or use with this app remain under whatever license their own authors

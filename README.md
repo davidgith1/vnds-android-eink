@@ -216,10 +216,13 @@ file, or other content you import or use with it.
 
 ## Acknowledgments
 
-- The original **VNDS** engine and its `.scr` script format, documented by Digital-Haze.
-- **NScripter**, created by Ogapee, and **[ONScripter-EN](https://github.com/Galladite27/ONScripter-EN)**,
-  the open-source engine derived from it — this app's own `nscripter` package is an independent
-  reimplementation of that script format, consulted against ONScripter-EN's public source purely as
-  a reference for real-world command semantics (see the LICENSE file's Third-Party Notices; no
-  ONScripter-EN code is included in or distributed with this repository).
+- The original **VNDS** engine, created by Jake Probst and anoNL and documented/hosted at
+  Digital-Haze (digital-haze.net).
+- **[NScripter](https://nscripter.com/)**, created by Naoki Takahashi, and Ogapee's open-source
+  **[ONScripter](https://onscripter.osdn.jp/onscripter.html)** clone of it, from which
+  **[ONScripter-EN](https://github.com/Galladite27/ONScripter-EN)** descends — this app's own
+  `nscripter` package is an independent reimplementation of that script format, consulted against
+  ONScripter-EN's public source purely as a reference for real-world command semantics (see the
+  LICENSE file's Third-Party Notices; no ONScripter-EN code is included in or distributed with this
+  repository).
 - [VNDB](https://vndb.org) for the metadata API used by the optional "Get info from VNDB" linking.
