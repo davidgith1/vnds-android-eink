@@ -29,3 +29,8 @@ local.properties
 .claude/
 *.kate-swp
 /CLAUDE.md
+
+# Release-signing secrets -- never commit a keystore or its passwords.
+/keystore.properties
+*.jks
+*.keystore
