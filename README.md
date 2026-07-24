@@ -33,6 +33,7 @@ reader; not bundled with this repo.)*
 - [Screenshots](#screenshots)
 - [Features](#features)
 - [Requirements](#requirements)
+- [Downloads](#downloads)
 - [Building](#building)
 - [Using the app](#using-the-app)
 - [Supported VNDS script commands](#supported-vnds-script-commands)
@@ -95,6 +96,14 @@ VNDB lookup required.
 - Android 7.0 (API 24) or newer.
 - Onyx/Boox e-ink hardware is fully supported but not required — everything works (with real
   animations, if you want them) on any Android device.
+
+## Downloads
+
+Prebuilt, signed APKs are attached to each
+[GitHub release](https://github.com/davidgith1/vnds-android-eink/releases/latest), in two flavors
+(see [Building](#building) for what differs): `full` (includes Onyx's proprietary SDK for Boox
+hardware fast-refresh) and `free` (no proprietary dependencies at all). An F-Droid listing for the
+`free` flavor is planned.
 
 ## Building
 
