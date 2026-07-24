@@ -15,19 +15,34 @@ val keystoreProperties = Properties().apply {
 }
 
 android {
-    namespace = "com.example.vndsandroideink"
+    namespace = "io.github.davidgith1.vndsandroideink"
     compileSdk {
         version = release(37)
     }
 
     defaultConfig {
-        applicationId = "com.example.vndsandroideink"
+        applicationId = "io.github.davidgith1.vndsandroideink"
         minSdk = 24
         targetSdk = 37
         versionCode = 1
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // "full" bundles Onyx's proprietary onyxsdk-device (Boox hardware fast-refresh support) --
+    // see EinkRefreshManager's flavor-specific implementations under src/full and src/free. "free"
+    // has no proprietary dependencies at all, for distribution through F-Droid; it's functionally
+    // identical except EinkRefreshManager.isSupported() is always false there, so einkMode falls
+    // back to its ordinary (non-Onyx) instant-update behavior on every device, including Boox ones.
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("full") {
+            dimension = "distribution"
+        }
+        create("free") {
+            dimension = "distribution"
+        }
     }
 
     signingConfigs {
@@ -64,7 +79,7 @@ dependencies {
     implementation(libs.androidx.documentfile)
     implementation(libs.commons.compress)
     implementation(libs.xz)
-    implementation("com.onyx.android.sdk:onyxsdk-device:1.3.5.1")
+    "fullImplementation"("com.onyx.android.sdk:onyxsdk-device:1.3.5.1")
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)

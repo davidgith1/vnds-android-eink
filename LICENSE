@@ -679,7 +679,9 @@ Public License instead of this License.  But first, please read
 
 This repository's own source code is licensed under the GNU GPL v3 (or later)
 above. It does not include, bundle, or distribute source code from any other
-software project.
+software project. Note, however, that the "full" build flavor (see below and
+app/build.gradle.kts) links a proprietary compiled binary dependency into its
+APK -- see the Onyx EPD SDK notice below.
 
   * VNDS script format (`app/.../vnds/`): an independent implementation of the
     `.scr` script format used by the original Nintendo DS "VNDS" engine,
@@ -695,6 +697,22 @@ software project.
     real-world command semantics, for interoperability with existing script
     packs. No ONScripter-EN source code is copied into, linked against, or
     distributed with this repository.
+
+  * Onyx EPD hardware SDK (`onyxsdk-device`, used only by the "full" flavor's
+    copy of `EinkRefreshManager` -- see app/build.gradle.kts): a proprietary,
+    closed-source library published by Onyx International for their Boox
+    e-ink hardware, fetched as a precompiled binary dependency from Onyx's own
+    Maven repository (repo.boox.com), not from this repository. It is not
+    licensed under the GPL and no source for it is available here. Shipping a
+    single APK containing both GPL-licensed and proprietary code this way
+    sits in a genuinely disputed area of GPL compliance -- whether a
+    vendor hardware SDK like this qualifies as a "System Library" under GPLv3
+    section 1, or instead forms a combined work -- and this project does not
+    take a position on that question. The "free" build flavor excludes this
+    dependency entirely (no proprietary code, compiled or otherwise) and is
+    the flavor distributed through F-Droid; the "full" flavor (with Boox
+    hardware fast-refresh support) is what's distributed via this project's
+    own GitHub releases.
 
 Story packs, save data, completion guides, or any other content you import
 into or use with this app remain under whatever license their own authors

@@ -98,20 +98,25 @@ VNDB lookup required.
 
 ## Building
 
-Standard Gradle project, single module (`app`).
+Standard Gradle project, single module (`app`), with two build flavors:
+
+- **`full`** — includes Onyx's proprietary `onyxsdk-device` for Boox hardware fast-refresh support.
+  This is what's distributed via this project's own GitHub releases.
+- **`free`** — no proprietary dependencies at all; functionally identical except Boox hardware
+  fast-refresh isn't available. This is the flavor distributed through F-Droid.
 
 ```bash
-# Debug APK
+# Debug APK (both flavors; or assembleFreeDebug / assembleFullDebug for just one)
 ./gradlew assembleDebug
 
-# Install on a connected device/emulator
-./gradlew installDebug
+# Install a specific flavor on a connected device/emulator
+./gradlew installFullDebug   # or installFreeDebug
 
-# Unit tests
-./gradlew testDebugUnitTest
+# Unit tests (both flavors; or testFreeDebugUnitTest / testFullDebugUnitTest for just one)
+./gradlew test
 
 # Instrumented tests (needs a device/emulator)
-./gradlew connectedDebugAndroidTest
+./gradlew connectedAndroidTest
 
 # Lint
 ./gradlew lint
