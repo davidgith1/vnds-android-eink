@@ -418,6 +418,32 @@ public class NsCommandDispatcherTest {
     }
 
     @Test
+    public void spbtnOffersTheLspImageAlongsideTheTextChoiceMenu() {
+        // A real host wants to render the actual button graphic (see ReaderActivity's split
+        // image/text choice layout), not just the filename-derived text fallback -- "spbtn" should
+        // carry the same resolved image file "lsp" loaded at that layer through to "btnwait"'s
+        // onChoices(options, images) call.
+        NsExecState state = new NsExecState();
+        exec(state, "lsp 49,\":a/2,0,3;dat\\menu\\hajime.jpg\",410,80");
+        exec(state, "spbtn 49,49");
+        exec(state, "btnwait %1");
+        assertEquals(java.util.Collections.singletonList(new File(vnDir, "dat/menu/hajime.jpg")),
+                listener.lastChoiceImages);
+    }
+
+    @Test
+    public void spbtnOffersNoImageForATextLabeledButton() {
+        // A "lsp"-":s/…;…" text-sprite button has no real image of its own, unlike a plain
+        // image-sprite one (see spbtnOffersTheLspImageAlongsideTheTextChoiceMenu above).
+        NsExecState state = new NsExecState();
+        exec(state, "lsp 1,\":s/36,38,0;#FFFFFF`Start game\",565,430");
+        exec(state, "spbtn 1,1");
+        exec(state, "btnwait %1");
+        assertEquals(java.util.Collections.singletonList("Start game"), listener.lastChoices);
+        assertEquals(java.util.Collections.singletonList(null), listener.lastChoiceImages);
+    }
+
+    @Test
     public void ldFiresOnSpriteAtAutoPositionIgnoringEffectId() {
         // Real "ld" syntax is "ld <l|c|r>,\"file\",<effect id>" -- the 3rd argument is a transition
         // effect, not a coordinate, and 'l'/'c'/'r' are

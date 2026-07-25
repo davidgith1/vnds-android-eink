@@ -28,6 +28,7 @@ final class FakeListener implements VnEngine.Listener {
     File lastMusic;
     boolean musicStopped;
     List<String> lastChoices;
+    List<File> lastChoiceImages;
     int lastDelayFrames = -1;
     final Map<String, String> globals = new HashMap<>();
     boolean finished = false;
@@ -90,6 +91,13 @@ final class FakeListener implements VnEngine.Listener {
     @Override
     public void onChoices(List<String> options) {
         lastChoices = options;
+        lastChoiceImages = null;
+    }
+
+    @Override
+    public void onChoices(List<String> options, List<File> images) {
+        lastChoices = options;
+        lastChoiceImages = images;
     }
 
     @Override

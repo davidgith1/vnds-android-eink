@@ -1108,6 +1108,7 @@ public final class NsCommandDispatcher {
             String label = textSpriteLabel(spec);
             if (label != null) {
                 state.spriteTextLabels.put(layer, label);
+                state.spriteImageFiles.remove(layer);
                 return;
             }
             // Anything else is a real image sprite at an explicit numbered layer -- e.g. scripts
@@ -1116,6 +1117,7 @@ public final class NsCommandDispatcher {
             // literal x/y instead of an "l"/"c"/"r" auto-position (this command has no such
             // left/center/right convention of its own).
             state.spriteFileHints.put(layer, fileNameHint(spec));
+            state.spriteImageFiles.put(layer, resolveAsset(state, vnDir, spec));
             if (args.size() < 4) {
                 return;
             }
@@ -1143,16 +1145,21 @@ public final class NsCommandDispatcher {
             int buttonId = (int) NsExpr.numeric(args.get(1), state);
             // A text-labeled ("lsp"-":s/…;…") layer gets its real label; an image-sprite button
             // (a common pattern for save/load/options
-            // menus -- this host can't render/hit-test the real button graphics) falls back to that
-            // same "lsp" call's own filename (see fileNameHint's doc), or a bare button id as a
-            // last resort -- still offered as a native choice either way, so the menu stays
-            // navigable rather than silently stranding the player in front of it.
+            // menus -- this host can't hit-test the real button graphics' precise click shape, so
+            // it's still offered as a native choice rather than real free-form tap positions) shows
+            // that same "lsp" call's own image (see NsExecState.spriteImageFiles's doc) alongside a
+            // filename-derived label (see fileNameHint's doc) as a last resort -- still offered as a
+            // native choice either way, so the menu stays navigable rather than silently stranding
+            // the player in front of it.
             String label = state.spriteTextLabels.get(layer);
+            File image = null;
             if (label == null) {
                 label = state.spriteFileHints.get(layer);
+                image = state.spriteImageFiles.get(layer);
             }
             state.pendingButtonLabels.add(label != null ? label : ("Button " + buttonId));
             state.pendingButtonIds.add(buttonId);
+            state.pendingButtonImages.add(image);
         };
         h.put("spbtn", spbtnHandler);
         h.put("exbtn", spbtnHandler);
@@ -1180,6 +1187,7 @@ public final class NsCommandDispatcher {
             int buttonId = (int) NsExpr.numeric(args.get(0), state);
             state.pendingButtonLabels.add("Button " + buttonId);
             state.pendingButtonIds.add(buttonId);
+            state.pendingButtonImages.add(null);
         });
         // "btnwait <var>" -- real semantics: blocks until the player clicks one of the
         // "spbtn"-registered sprite buttons, stores its button id into <var>, then falls through to
@@ -1216,14 +1224,17 @@ public final class NsCommandDispatcher {
             state.pendingBtnwaitVarIndex = NsExpr.numVarIndex(args.get(0), state);
             state.pendingChoiceButtonIds = new ArrayList<>(state.pendingButtonIds);
             List<String> optionTexts = new ArrayList<>(state.pendingButtonLabels);
+            List<File> optionImages = new ArrayList<>(state.pendingButtonImages);
             state.pendingButtonLabels.clear();
             state.pendingButtonIds.clear();
+            state.pendingButtonImages.clear();
             state.runState = VnEngine.State.WAITING_CHOICE;
             state.lastChoiceOptionTexts = new ArrayList<>(optionTexts);
             state.lastChoiceLabels = null;
             state.lastChoiceBtnwaitVarIndex = state.pendingBtnwaitVarIndex;
             state.lastChoiceButtonIds = new ArrayList<>(state.pendingChoiceButtonIds);
-            listener.onChoices(optionTexts);
+            state.lastChoiceImages = new ArrayList<>(optionImages);
+            listener.onChoices(optionTexts, optionImages);
         };
         h.put("btnwait", btnwaitHandler);
         // "selectbtnwait"/"btnwait2"/"textbtnwait" -- in real ONScripter-EN, the command table binds
@@ -1268,6 +1279,7 @@ public final class NsCommandDispatcher {
             }
             state.pendingButtonLabels.add(label);
             state.pendingButtonIds.add(buttonId);
+            state.pendingButtonImages.add(null);
         });
         // "getcselnum var" -- sets var to the number of options the most recent "csel" declared.
         // In real ONScripter-EN, this just counts the

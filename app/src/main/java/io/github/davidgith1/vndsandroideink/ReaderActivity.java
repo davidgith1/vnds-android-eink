@@ -15,6 +15,7 @@ import android.text.StaticLayout;
 import android.text.TextPaint;
 import android.text.style.StyleSpan;
 import android.util.LruCache;
+import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -1148,7 +1149,12 @@ public class ReaderActivity extends AppCompatActivity implements VnEngine.Listen
 
     @Override
     public void onChoices(List<String> options) {
-        runOnUiThread(() -> showChoices(options));
+        runOnUiThread(() -> showChoices(options, null));
+    }
+
+    @Override
+    public void onChoices(List<String> options, List<File> images) {
+        runOnUiThread(() -> showChoices(options, images));
     }
 
     @Override
@@ -1296,16 +1302,23 @@ public class ReaderActivity extends AppCompatActivity implements VnEngine.Listen
     }
 
     private void showChoices(List<String> options) {
+        showChoices(options, null);
+    }
+
+    /** @param images parallel to {@code options}, an NScripter "spbtn"/"exbtn" button-sprite's own
+     *                image file per option (see {@link VnEngine.Listener#onChoices(List, List)}),
+     *                {@code null} (the whole list, or an individual entry) when there's no image to
+     *                show -- always the case for a VNDS choice. An option with an image gets a
+     *                split layout (image on the left half, text on the right half) instead of the
+     *                plain text button every other option still gets. */
+    private void showChoices(List<String> options, List<File> images) {
         choicesPanel.removeAllViews();
         for (int i = 0; i < options.size(); i++) {
             final int index = i;
-            Button button = new Button(this);
-            button.setText(options.get(i));
-            button.setAllCaps(false);
-            button.setTextColor(ContextCompat.getColorStateList(this, R.color.choice_button_text));
-            button.setBackground(ContextCompat.getDrawable(this, R.drawable.bg_choice_button));
-            button.setStateListAnimator(null); // no press elevation animation
-            button.setElevation(0f);
+            File imageFile = images != null && index < images.size() ? images.get(index) : null;
+            View button = imageFile != null && imageFile.isFile()
+                    ? buildImageChoiceButton(options.get(i), imageFile)
+                    : buildTextChoiceButton(options.get(i));
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             lp.topMargin = dp(8);
@@ -1321,6 +1334,51 @@ public class ReaderActivity extends AppCompatActivity implements VnEngine.Listen
         // advanceBar itself stays visible (not hidden like it used to be) -- only its buttons are
         // gated off, via choicesShowing(), so Guide can still be used while deciding.
         choicesPanel.setVisibility(View.VISIBLE);
+    }
+
+    private Button buildTextChoiceButton(String text) {
+        Button button = new Button(this);
+        button.setText(text);
+        button.setAllCaps(false);
+        button.setTextColor(ContextCompat.getColorStateList(this, R.color.choice_button_text));
+        button.setBackground(ContextCompat.getDrawable(this, R.drawable.bg_choice_button));
+        button.setStateListAnimator(null); // no press elevation animation
+        button.setElevation(0f);
+        return button;
+    }
+
+    /** A choice button for an NScripter image-sprite button, split evenly down the middle: the
+     * button's own image on the left half, its text label on the right half -- rather than the
+     * plain centered text {@link #buildTextChoiceButton} renders for every other choice. */
+    private View buildImageChoiceButton(String text, File imageFile) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setBackground(ContextCompat.getDrawable(this, R.drawable.bg_choice_button));
+        row.setStateListAnimator(null); // no press elevation animation
+        row.setElevation(0f);
+        row.setClickable(true);
+        row.setFocusable(true);
+
+        ImageView imageView = new ImageView(this);
+        imageView.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        imageView.setAdjustViewBounds(true);
+        imageView.setMaxHeight(dp(72));
+        imageView.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        imageView.setImageBitmap(loadBitmap(imageFile.getAbsolutePath()));
+
+        TextView textView = new TextView(this);
+        LinearLayout.LayoutParams textLp =
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        textLp.leftMargin = dp(12);
+        textView.setLayoutParams(textLp);
+        textView.setText(text);
+        textView.setTextColor(ContextCompat.getColorStateList(this, R.color.choice_button_text));
+        textView.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+
+        row.addView(imageView);
+        row.addView(textView);
+        return row;
     }
 
     private int dp(int value) {

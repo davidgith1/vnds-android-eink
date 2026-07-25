@@ -345,7 +345,8 @@ public final class NsScriptEngine implements VnEngine {
             state.pendingChoiceButtonIds = new ArrayList<>(state.lastChoiceButtonIds);
         }
         state.runState = State.WAITING_CHOICE;
-        listener.onChoices(new ArrayList<>(state.lastChoiceOptionTexts));
+        listener.onChoices(new ArrayList<>(state.lastChoiceOptionTexts),
+                state.lastChoiceImages == null ? null : new ArrayList<>(state.lastChoiceImages));
         return true;
     }
 

@@ -2,6 +2,7 @@ package io.github.davidgith1.vndsandroideink.nscripter;
 
 import io.github.davidgith1.vndsandroideink.engine.VnEngine;
 
+import java.io.File;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -91,12 +92,23 @@ public final class NsExecState {
      * instead of a bare button id) for an image-sprite button with no real text this host can show. */
     public final Map<Integer, String> spriteFileHints = new HashMap<>();
 
-    /** (label, button id) pairs registered by "spbtn" since the last "btnwait" consumed them --
-     * ONScripter-EN's clickable-button-sprite pattern ("lsp" + "spbtn" + "btnwait"), mapped onto
-     * the host's native choice UI rather than real sprite rendering/hit-testing. Parallel lists,
-     * in registration order. */
+    /** The resolved image file for the last "lsp"-loaded plain image sprite at each layer --
+     * companion to {@link #spriteFileHints} (a display-name fallback), this is the actual asset a
+     * host CAN render, consulted by "spbtn" so an image-sprite button (see {@link
+     * #pendingButtonImages}) can show its real graphic instead of only a text placeholder. Absent
+     * (or stale, harmlessly -- "spbtn" only reads it when {@link #spriteTextLabels} has no entry
+     * for that layer) for a text-labeled layer, which has no image of its own. */
+    public final Map<Integer, File> spriteImageFiles = new HashMap<>();
+
+    /** (label, button id, image file) triples registered by "spbtn" since the last "btnwait"
+     * consumed them -- ONScripter-EN's clickable-button-sprite pattern ("lsp" + "spbtn" +
+     * "btnwait"), mapped onto the host's native choice UI rather than real sprite
+     * rendering/hit-testing. Parallel lists, in registration order; {@link #pendingButtonImages}
+     * entries are {@code null} for a button with no real image to show (a text-labeled sprite, a
+     * bare "btn" crop, or a "cselbtn" link). */
     public final List<String> pendingButtonLabels = new ArrayList<>();
     public final List<Integer> pendingButtonIds = new ArrayList<>();
+    public final List<File> pendingButtonImages = new ArrayList<>();
 
     /** The button ids "btnwait" is currently offering as a native choice, snapshotted from {@link
      * #pendingButtonIds} at the moment it fired {@code onChoices} -- consulted (and then cleared)
@@ -122,6 +134,10 @@ public final class NsExecState {
     public List<String> lastChoiceLabels = null;
     public Integer lastChoiceBtnwaitVarIndex = null;
     public List<Integer> lastChoiceButtonIds = null;
+    /** Snapshot of {@link #pendingButtonImages} at the same moment {@link #lastChoiceButtonIds} was
+     * snapshotted -- null for a "select"-style menu (which never has button images), parallel to
+     * {@link #lastChoiceOptionTexts} for a "btnwait"-style one. */
+    public List<File> lastChoiceImages = null;
 
     /** The (text, label) pairs registered by "csel" -- ONScripter-EN's non-blocking select-link
      * declaration: "csel" parses the exact same "\"text\",label,..." syntax
