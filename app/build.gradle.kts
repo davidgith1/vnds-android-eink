@@ -20,6 +20,13 @@ android {
         version = release(37)
     }
 
+    // AGP embeds a "Dependency metadata" block in the signed APK by default (for Play Console).
+    // F-Droid's scanner flags any extra signing block as suspicious, so it's disabled here.
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+
     defaultConfig {
         applicationId = "io.github.davidgith1.vndsandroideink"
         minSdk = 24
