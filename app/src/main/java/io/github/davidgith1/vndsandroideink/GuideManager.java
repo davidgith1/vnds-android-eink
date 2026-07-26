@@ -72,11 +72,16 @@ public final class GuideManager {
         /** Free-text note for anything not itemized as its own checkbox (an "unenumeratedChoices"
          * count and/or a plain "note" field); null if neither was present. */
         public final String info;
+        /** The guide's own "createsSave" value -- a save-slot id (see {@link SaveSlotRef}) the
+         * player should create a manual save under at this checkpoint, before making its choices;
+         * null if the guide named none (Never7's guide uses this at its route-branch points). */
+        public final String createsSaveId;
 
-        Checkpoint(String label, List<Choice> choices, String info) {
+        Checkpoint(String label, List<Choice> choices, String info, String createsSaveId) {
             this.label = label;
             this.choices = choices;
             this.info = info;
+            this.createsSaveId = createsSaveId;
         }
     }
 
@@ -470,7 +475,12 @@ public final class GuideManager {
             info = (note != null && !note.isEmpty()) ? note : null;
         }
 
-        return new Checkpoint(label, choices, info);
+        String createsSaveId = checkpointJson.optString("createsSave", null);
+        if (createsSaveId != null && createsSaveId.isEmpty()) {
+            createsSaveId = null;
+        }
+
+        return new Checkpoint(label, choices, info, createsSaveId);
     }
 
     /** Extra per-choice context worth a smaller secondary line under its checkbox row:
