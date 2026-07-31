@@ -79,11 +79,16 @@ public final class NsSaveManager {
         public final List<NsSpriteEntry> sprites;
         public final String lastSpeaker;
         public final List<SaveManager.SavedLine> bodyLines;
+        /** Whether this slot was captured while a choice menu was on screen (engine state
+         * WAITING_CHOICE) -- if so, {@code engineState}'s {@code lastChoice*} fields describe the
+         * menu to redisplay via {@link NsScriptEngine#reshowLastChoiceMenu()} after {@link
+         * NsScriptEngine#restoreFromSnapshot}. */
+        public final boolean atChoice;
 
         NsSlotData(NsScriptEngine.Snapshot engineState, String backgroundPath,
                    VnEngine.SpriteTransparency backgroundTransparency, int backgroundAlphaMaskCells,
                    String musicPath, List<NsSpriteEntry> sprites, String lastSpeaker,
-                   List<SaveManager.SavedLine> bodyLines) {
+                   List<SaveManager.SavedLine> bodyLines, boolean atChoice) {
             this.engineState = engineState;
             this.backgroundPath = backgroundPath;
             this.backgroundTransparency = backgroundTransparency;
@@ -92,6 +97,7 @@ public final class NsSaveManager {
             this.sprites = sprites;
             this.lastSpeaker = lastSpeaker;
             this.bodyLines = bodyLines;
+            this.atChoice = atChoice;
         }
     }
 
@@ -138,6 +144,19 @@ public final class NsSaveManager {
                              String backgroundPath, VnEngine.SpriteTransparency backgroundTransparency,
                              int backgroundAlphaMaskCells, String musicPath, List<NsSpriteEntry> sprites,
                              String lastSpeaker, List<SaveManager.SavedLine> bodyLines) {
+        save(context, vnKey, slot, engine, backgroundPath, backgroundTransparency, backgroundAlphaMaskCells,
+                musicPath, sprites, lastSpeaker, bodyLines, false);
+    }
+
+    /** @param atChoice whether the engine was paused on a choice menu (state WAITING_CHOICE) at
+     *                  save time, rather than a plain WAITING_TAP -- if so, {@code engine}'s own
+     *                  {@code lastChoice*} snapshot fields (already tracked internally regardless
+     *                  of this flag) are persisted so the menu can be redisplayed via {@link
+     *                  NsScriptEngine#reshowLastChoiceMenu()} on load. */
+    public static void save(Context context, String vnKey, int slot, NsScriptEngine engine,
+                             String backgroundPath, VnEngine.SpriteTransparency backgroundTransparency,
+                             int backgroundAlphaMaskCells, String musicPath, List<NsSpriteEntry> sprites,
+                             String lastSpeaker, List<SaveManager.SavedLine> bodyLines, boolean atChoice) {
         NsScriptEngine.Snapshot snap = engine.snapshotState();
         try {
             JSONObject numVars = new JSONObject();
@@ -163,6 +182,24 @@ public final class NsSaveManager {
             JSONArray callStack = new JSONArray();
             for (int frame : snap.callStack) {
                 callStack.put(frame);
+            }
+            JSONArray lastChoiceOptionTexts = new JSONArray();
+            if (snap.lastChoiceOptionTexts != null) {
+                for (String text : snap.lastChoiceOptionTexts) {
+                    lastChoiceOptionTexts.put(text);
+                }
+            }
+            JSONArray lastChoiceLabels = new JSONArray();
+            if (snap.lastChoiceLabels != null) {
+                for (String label : snap.lastChoiceLabels) {
+                    lastChoiceLabels.put(label);
+                }
+            }
+            JSONArray lastChoiceButtonIds = new JSONArray();
+            if (snap.lastChoiceButtonIds != null) {
+                for (int id : snap.lastChoiceButtonIds) {
+                    lastChoiceButtonIds.put(id);
+                }
             }
             JSONArray spritesJson = new JSONArray();
             for (NsSpriteEntry s : sprites) {
@@ -199,6 +236,16 @@ public final class NsSaveManager {
                     .putString(key(vnKey, slot, "pendingDialogueRemainder"),
                             snap.pendingDialogueRemainder == null ? "" : snap.pendingDialogueRemainder)
                     .putString(key(vnKey, slot, "nsaDir"), snap.nsaDir)
+                    .putBoolean(key(vnKey, slot, "hasLastChoiceOptionTexts"), snap.lastChoiceOptionTexts != null)
+                    .putString(key(vnKey, slot, "lastChoiceOptionTexts"), lastChoiceOptionTexts.toString())
+                    .putBoolean(key(vnKey, slot, "hasLastChoiceLabels"), snap.lastChoiceLabels != null)
+                    .putString(key(vnKey, slot, "lastChoiceLabels"), lastChoiceLabels.toString())
+                    .putBoolean(key(vnKey, slot, "hasLastChoiceBtnwaitVarIndex"), snap.lastChoiceBtnwaitVarIndex != null)
+                    .putInt(key(vnKey, slot, "lastChoiceBtnwaitVarIndex"),
+                            snap.lastChoiceBtnwaitVarIndex != null ? snap.lastChoiceBtnwaitVarIndex : 0)
+                    .putBoolean(key(vnKey, slot, "hasLastChoiceButtonIds"), snap.lastChoiceButtonIds != null)
+                    .putString(key(vnKey, slot, "lastChoiceButtonIds"), lastChoiceButtonIds.toString())
+                    .putBoolean(key(vnKey, slot, "atChoice"), atChoice)
                     .putString(key(vnKey, slot, "bg"), backgroundPath == null ? "" : backgroundPath)
                     .putString(key(vnKey, slot, "bgTransparency"), backgroundTransparency.name())
                     .putInt(key(vnKey, slot, "bgAlphaMaskCells"), backgroundAlphaMaskCells)
@@ -267,9 +314,38 @@ public final class NsSaveManager {
             String pendingRemainder = p.getString(key(vnKey, slot, "pendingDialogueRemainder"), "");
             String nsaDir = p.getString(key(vnKey, slot, "nsaDir"), "");
 
+            List<String> lastChoiceOptionTexts = null;
+            if (p.getBoolean(key(vnKey, slot, "hasLastChoiceOptionTexts"), false)) {
+                lastChoiceOptionTexts = new ArrayList<>();
+                JSONArray json = new JSONArray(p.getString(key(vnKey, slot, "lastChoiceOptionTexts"), "[]"));
+                for (int i = 0; i < json.length(); i++) {
+                    lastChoiceOptionTexts.add(json.getString(i));
+                }
+            }
+            List<String> lastChoiceLabels = null;
+            if (p.getBoolean(key(vnKey, slot, "hasLastChoiceLabels"), false)) {
+                lastChoiceLabels = new ArrayList<>();
+                JSONArray json = new JSONArray(p.getString(key(vnKey, slot, "lastChoiceLabels"), "[]"));
+                for (int i = 0; i < json.length(); i++) {
+                    lastChoiceLabels.add(json.getString(i));
+                }
+            }
+            Integer lastChoiceBtnwaitVarIndex = p.getBoolean(key(vnKey, slot, "hasLastChoiceBtnwaitVarIndex"), false)
+                    ? p.getInt(key(vnKey, slot, "lastChoiceBtnwaitVarIndex"), 0) : null;
+            List<Integer> lastChoiceButtonIds = null;
+            if (p.getBoolean(key(vnKey, slot, "hasLastChoiceButtonIds"), false)) {
+                lastChoiceButtonIds = new ArrayList<>();
+                JSONArray json = new JSONArray(p.getString(key(vnKey, slot, "lastChoiceButtonIds"), "[]"));
+                for (int i = 0; i < json.length(); i++) {
+                    lastChoiceButtonIds.add(json.getInt(i));
+                }
+            }
+            boolean atChoice = p.getBoolean(key(vnKey, slot, "atChoice"), false);
+
             NsScriptEngine.Snapshot engineState = new NsScriptEngine.Snapshot(
                     pc, numVars, strVars, numAliases, strAliases, callStack, pendingPageClear,
-                    pendingRemainder.isEmpty() ? null : pendingRemainder, barewordConstants, nsaDir);
+                    pendingRemainder.isEmpty() ? null : pendingRemainder, barewordConstants, nsaDir,
+                    lastChoiceOptionTexts, lastChoiceLabels, lastChoiceBtnwaitVarIndex, lastChoiceButtonIds);
 
             String bg = p.getString(key(vnKey, slot, "bg"), "");
             VnEngine.SpriteTransparency bgTransparency =
@@ -297,7 +373,7 @@ public final class NsSaveManager {
             }
 
             return new NsSlotData(engineState, bg, bgTransparency, bgAlphaMaskCells, music, sprites,
-                    lastSpeaker, lines);
+                    lastSpeaker, lines, atChoice);
         } catch (JSONException e) {
             return null;
         }

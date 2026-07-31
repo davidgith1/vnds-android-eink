@@ -110,6 +110,46 @@ public class NsScriptEngineTest {
     }
 
     @Test
+    public void snapshotRoundTripsAChoiceMenuIntoABrandNewEngineInstance() throws IOException {
+        // Covers saving/loading while a choice menu is on screen: snapshotState()/
+        // restoreFromSnapshot() must carry the lastChoice* fields through a save/load round-trip
+        // (a fresh NsExecState otherwise has none of this), so ReaderActivity can call
+        // reshowLastChoiceMenu() after restoring into a NEW engine instance -- simulating an app
+        // restart, unlike reshowLastChoiceMenuRestoresASelectMenuAfterSystemcallLoadFindsNothing
+        // above, which reshows within the SAME instance that never lost its state.
+        write(String.join("\n",
+                "*start",
+                "select \"Go left\",*left,\"Go right\",*right",
+                "*left",
+                "mov %1,1",
+                "goto *done",
+                "*right",
+                "mov %1,2",
+                "*done",
+                "The end\\",
+                ""));
+        FakeListener listener = new FakeListener();
+        NsScriptEngine engine = new NsScriptEngine(tmp.getRoot(), listener, new java.util.HashMap<>());
+        engine.start();
+        assertEquals(VnEngine.State.WAITING_CHOICE, engine.getState());
+        NsScriptEngine.Snapshot snapshot = engine.snapshotState();
+
+        FakeListener freshListener = new FakeListener();
+        NsScriptEngine freshEngine = new NsScriptEngine(tmp.getRoot(), freshListener, new java.util.HashMap<>());
+        freshEngine.restoreFromSnapshot(snapshot); // leaves WAITING_TAP, same as a plain-tap restore
+        assertEquals(VnEngine.State.WAITING_TAP, freshEngine.getState());
+
+        assertTrue(freshEngine.reshowLastChoiceMenu());
+        assertEquals(VnEngine.State.WAITING_CHOICE, freshEngine.getState());
+        assertEquals(2, freshListener.lastChoices.size());
+        assertEquals("Go right", freshListener.lastChoices.get(1));
+
+        freshEngine.choose(1); // "Go right" -> *right -> mov %1,2 -> falls through to *done
+        assertEquals("2", freshEngine.getVariablesSnapshot().get("%1"));
+        assertEquals("The end", freshListener.textLines.get(freshListener.textLines.size() - 1));
+    }
+
+    @Test
     public void midLineMarkersPauseWithinASingleScriptLineBeforeMovingOn() throws IOException {
         // A single line can pause twice mid-sentence
         // before its own trailing '\' finally ends the page and moves to the next script line.
