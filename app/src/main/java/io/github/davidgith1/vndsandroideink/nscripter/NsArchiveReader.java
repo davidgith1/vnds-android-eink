@@ -7,13 +7,16 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Reads NScripter's ".nsa" asset archive format. Reverse-engineered by black-box analysis of a
- * real NScripter game's archive (one such archive: 2918 entries, 115MB) --
- * examining the archive's own bytes directly (entry count, computed offsets, and JPEG/OGG
- * signatures at the computed positions all lining up) rather than reading any reference engine's
- * source, consistent with this project's clean-room approach.
+ * Reads NScripter's ".nsa" and ".sar" asset archive formats -- {@link #open} for the former,
+ * {@link #openSar} for the latter; both feed the same {@link Entry}/{@link #find}/{@link #read}
+ * surface, since a caller resolving a script asset by path doesn't care which container format it
+ * came from. Reverse-engineered by black-box analysis of real archives (one real NSA archive:
+ * 2918 entries, 115MB; one real SAR archive: 827 entries, 99MB) -- examining each archive's own
+ * bytes directly (entry count, computed offsets, and JPEG/OGG/RIFF signatures at the computed
+ * positions all lining up) rather than reading any reference engine's source, consistent with this
+ * project's clean-room approach.
  *
- * <p>Layout:
+ * <p>".nsa" layout:
  * <pre>
  * [2 bytes, big-endian]  entry count
  * [4 bytes, big-endian]  base offset (== byte offset where entry data starts; equals the total
@@ -29,6 +32,23 @@ import java.util.Map;
  *   [4 bytes, big-endian]     offset, relative to the base offset
  *   [4 bytes, big-endian]     compressed size (== original size when type is 0)
  *   [4 bytes, big-endian]     original (decompressed) size
+ * </pre>
+ *
+ * <p>".sar" layout -- an older, simpler sibling format (real ONScripter-EN's SarReader.cpp is the
+ * base every archive reader, NSA included, is built on): same entry count/base-offset header shape,
+ * but each entry omits the compression-type byte and the separate original-size field entirely --
+ * confirmed against a real archive (its stated entry count times a plausible per-entry size lines
+ * up exactly with the stated base offset, and RIFF/JPEG signatures land exactly at each entry's
+ * computed absolute offset):
+ * <pre>
+ * [2 bytes, big-endian]  entry count
+ * [4 bytes, big-endian]  base offset
+ * for each entry:
+ *   [null-terminated string]  path, backslash-separated
+ *   [4 bytes, big-endian]     offset, relative to the base offset
+ *   [4 bytes, big-endian]     size (both compressed and original -- no separate field for real
+ *                              ONScripter's rare ".nbz"-compressed entries either; {@link #read}
+ *                              throws for those the same way it does for an unsupported .nsa type)
  * </pre>
  *
  * <p>Deliberately holds no open file handle between calls -- only the parsed entry index (a plain
@@ -90,6 +110,37 @@ public final class NsArchiveReader {
         return new NsArchiveReader(archiveFile, baseOffset, byPath, byLowerPath);
     }
 
+    /** Opens a ".sar" archive -- see the class doc's layout note. Entries always have {@code
+     * originalSize == compressedSize} since the format has no separate field for it; a ".nbz"-named
+     * entry gets a nonzero {@code type} (real compression this reader doesn't decode) so {@link
+     * #read} throws for it the same way an unsupported .nsa compression type does, rather than
+     * silently handing back compressed bytes as if they were the real asset. */
+    public static NsArchiveReader openSar(File archiveFile) throws IOException {
+        Map<String, Entry> byPath = new HashMap<>();
+        Map<String, Entry> byLowerPath = new HashMap<>();
+        long baseOffset;
+        try (RandomAccessFile raf = new RandomAccessFile(archiveFile, "r")) {
+            int count = readUnsignedShort(raf);
+            baseOffset = readUnsignedInt(raf);
+            for (int i = 0; i < count; i++) {
+                String path = readCString(raf);
+                long offset = readUnsignedInt(raf);
+                long size = readUnsignedInt(raf);
+                // 4 = real ONScripter-EN's own NBZ_COMPRESSION enum value (see BaseReader.h) --
+                // NOT 1 (that's SPB_COMPRESSION, a different, now-decoded format; see
+                // NsArchiveCompression's class doc). A ".nbz" entry's real compression is inferred
+                // purely from its own filename suffix, the same way real ONScripter-EN's own
+                // getRegisteredCompressionType does for a SAR archive (which -- unlike NSA -- has no
+                // per-entry compression-type byte to read one from at all).
+                int type = path.toLowerCase(java.util.Locale.ROOT).endsWith(".nbz") ? 4 : 0;
+                Entry entry = new Entry(path, type, offset, size, size);
+                byPath.put(path, entry);
+                byLowerPath.putIfAbsent(path.toLowerCase(java.util.Locale.ROOT), entry);
+            }
+        }
+        return new NsArchiveReader(archiveFile, baseOffset, byPath, byLowerPath);
+    }
+
     /** Looks up an entry by its stored path (backslash-separated -- these archives are always
      * built on Windows), exact match first, then case-insensitive -- the same tolerance
      * vnds.ScriptEngine.resolveAsset applies for real files, since archives are commonly authored
@@ -112,20 +163,29 @@ public final class NsArchiveReader {
     }
 
     /** Reads one entry's raw bytes, opening the archive file fresh for this call (see the class
-     * doc). Only {@code type == 0} (uncompressed) entries are supported -- see the class doc's
-     * note on types 1/2. */
+     * doc), decoding real SPB ({@code type} 1) or LZSS ({@code type} 2) compression if present --
+     * see {@link NsArchiveCompression}'s own class doc for what those are and why they matter (a
+     * real game's whole title screen, in one observed case). {@code type} 4 (NBZ, a real bzip2-
+     * based scheme, rare in practice -- seen only on ".nbz"-suffixed SAR entries) still isn't
+     * decoded; {@link #read} throws for that one rather than guessing at it. */
     public byte[] read(Entry entry) throws IOException {
-        if (entry.type != 0) {
-            throw new UnsupportedOperationException(
-                    "\"" + entry.path + "\" uses .nsa compression type " + entry.type
-                            + ", which isn't reverse-engineered yet (only type 0/uncompressed is supported).");
-        }
         byte[] data = new byte[(int) entry.compressedSize];
         try (RandomAccessFile raf = new RandomAccessFile(archiveFile, "r")) {
             raf.seek(baseOffset + entry.offset);
             raf.readFully(data);
         }
-        return data;
+        switch (entry.type) {
+            case 0:
+                return data;
+            case 1:
+                return NsArchiveCompression.decodeSpb(data);
+            case 2:
+                return NsArchiveCompression.decodeLzss(data, (int) entry.originalSize);
+            default:
+                throw new UnsupportedOperationException(
+                        "\"" + entry.path + "\" uses archive compression type " + entry.type
+                                + ", which isn't reverse-engineered yet (only types 0/1/2 are supported).");
+        }
     }
 
     private static int readUnsignedShort(RandomAccessFile f) throws IOException {

@@ -36,18 +36,22 @@ public final class NsTokenizer {
     /** Real scripts routinely trail a command with an unquoted ";comment" on the same line (e.g.
      * {@code dwave 1,"se.wav";<SE cue>}). Strips it
      * before the line is treated as a statement, the same way a whole-line ";comment" never
-     * reaches {@link NsLine.Type#STATEMENT}. A quoted ';' (inside "...") doesn't count. This does
+     * reaches {@link NsLine.Type#STATEMENT}. A quoted ';' (inside "..." or `...`, NScripter's two
+     * equivalent string delimiters -- see {@link #splitTopLevelCommas}) doesn't count. This does
      * mean a literal ';' used as ASCII punctuation in dialogue text gets truncated too -- an
      * accepted tradeoff since trailing-comment stripping is a script-wide NScripter convention,
      * not command-specific, and real dialogue in the format's usual (Japanese) source material
      * doesn't use ASCII semicolons as punctuation. */
     private static String stripTrailingComment(String text) {
         boolean inQuotes = false;
+        boolean inBacktick = false;
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
-            if (c == '"') {
+            if (c == '"' && !inBacktick) {
                 inQuotes = !inQuotes;
-            } else if (c == ';' && !inQuotes) {
+            } else if (c == '`' && !inQuotes) {
+                inBacktick = !inBacktick;
+            } else if (c == ';' && !inQuotes && !inBacktick) {
                 return text.substring(0, i).trim();
             }
         }
@@ -76,9 +80,11 @@ public final class NsTokenizer {
     }
 
     /**
-     * Splits a command's argument text on top-level commas (commas inside a "quoted string" don't
-     * split) and classifies each resulting token. An empty {@code argsText} yields an empty list
-     * (a zero-argument command, e.g. a bare "click" line).
+     * Splits a command's argument text on top-level commas (commas inside a "quoted string" or a
+     * `backtick string` -- NScripter's two equivalent string delimiters, see real ONScripter-EN's
+     * {@code ScriptHandler::parseStr}, which reads either one as a literal run up to its matching
+     * close -- don't split) and classifies each resulting token. An empty {@code argsText} yields
+     * an empty list (a zero-argument command, e.g. a bare "click" line).
      */
     public static List<NsArg> parseArgs(String argsText) {
         List<NsArg> result = new ArrayList<>();
@@ -119,12 +125,16 @@ public final class NsTokenizer {
         List<String> parts = new ArrayList<>();
         StringBuilder current = new StringBuilder();
         boolean inQuotes = false;
+        boolean inBacktick = false;
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
-            if (c == '"') {
+            if (c == '"' && !inBacktick) {
                 inQuotes = !inQuotes;
                 current.append(c);
-            } else if (c == ',' && !inQuotes) {
+            } else if (c == '`' && !inQuotes) {
+                inBacktick = !inBacktick;
+                current.append(c);
+            } else if (c == ',' && !inQuotes && !inBacktick) {
                 parts.add(current.toString());
                 current.setLength(0);
             } else {
@@ -137,6 +147,14 @@ public final class NsTokenizer {
 
     private static NsArg classifyArg(String token) {
         if (token.length() >= 2 && token.charAt(0) == '"' && token.charAt(token.length() - 1) == '"') {
+            return new NsArg(NsArg.Kind.STRING_LITERAL, token, token.substring(1, token.length() - 1));
+        }
+        // A `backtick string`, NScripter's other string delimiter (commonly used for select/rmenu
+        // option text and dialogue so it can contain literal commas, e.g. "`Yes, I agree.`,*label"
+        // -- without this, splitTopLevelCommas's protection above is moot: the token would still
+        // arrive here as a bareword with its comma-bearing text truncated at the first internal
+        // comma from an earlier split). Matches real parseStr's `...` handling.
+        if (token.length() >= 2 && token.charAt(0) == '`' && token.charAt(token.length() - 1) == '`') {
             return new NsArg(NsArg.Kind.STRING_LITERAL, token, token.substring(1, token.length() - 1));
         }
         if (token.charAt(0) == '%') {

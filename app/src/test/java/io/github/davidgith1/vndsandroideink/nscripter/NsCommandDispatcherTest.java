@@ -1,5 +1,6 @@
 package io.github.davidgith1.vndsandroideink.nscripter;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
@@ -7,12 +8,19 @@ import static org.junit.Assert.assertTrue;
 
 import io.github.davidgith1.vndsandroideink.engine.VnEngine;
 
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.util.Arrays;
 
 public class NsCommandDispatcherTest {
+
+    @Rule
+    public TemporaryFolder tmp = new TemporaryFolder();
 
     private final File vnDir = new File("/fake/vn");
     private FakeListener listener = new FakeListener();
@@ -394,15 +402,41 @@ public class NsCommandDispatcherTest {
     }
 
     @Test
-    public void spbtnFallsBackToAGenericLabelForAnUnlabeledImageButton() {
-        // Save/load/options menus commonly use "spbtn" calls to
-        // register plain image-sprite buttons (no "lsp"-":s/…;…" text label at that layer) -- this
-        // host can't render/hit-test the real graphics, so it still offers them as a native choice
-        // rather than silently dropping the button and stranding the player.
+    public void lspRecognizesATextSpriteWithNoSizePitchBlockAtAll() {
+        // Real ONScripter-EN's own parseTaggedString only reads a "/size,size,pitch;" block when a
+        // '/' immediately follows "s" -- it's genuinely OPTIONAL, falling back to the sentence
+        // font's own default size and jumping straight into the "#RRGGBB" color run with no
+        // separating ';' at all otherwise. A real, observed case (night_of_the_forget_me_nots's own
+        // script): "lsp 1,\":s#FFFFFF`Come here...\",...", no "/...;" block whatsoever. Before this
+        // was handled, requiring a ';' unconditionally misdetected this as a real image file --
+        // attempting to resolve the ENTIRE raw ":s#FFFFFF`Come here..." string as a literal
+        // filename -- instead of ever tracking "Come here..." as the button's real text label.
+        NsExecState state = new NsExecState();
+        exec(state, "lsp 1,\":s#FFFFFF`Come here...\",565,430");
+        assertTrue("must not be treated as a real image file", listener.spriteFiles.isEmpty());
+        exec(state, "spbtn 1,1");
+        exec(state, "btnwait %0");
+        assertEquals(java.util.Collections.singletonList("Come here..."), listener.lastChoices);
+    }
+
+    @Test
+    public void spbtnOnALayerNeverLspdRegistersNoButtonAtAll() {
+        // Real ONScripter-EN's own spbtnCommand explicitly refuses to register a button for a
+        // sprite layer with zero cells -- i.e. one whose "lsp"/"ld" was never actually called (see
+        // ONScripterLabel_command.cpp: "if (sprite_info[sprite_no].num_of_cells == 0) return;") --
+        // there's nothing visible there for a real player to click, so the button silently doesn't
+        // exist. A common real pattern this matters for: an "omake"/bonus-content button
+        // conditionally lsp'd only once unlocked ("if %101 > 0 lsp 47,...") but spbtn'd on that same
+        // layer UNCONDITIONALLY right after -- before this was fixed, a fresh (not-yet-unlocked)
+        // playthrough surfaced a phantom "Button 47" placeholder choice with nothing behind it,
+        // letting the player "select" content that was never actually shown.
         NsExecState state = new NsExecState();
         exec(state, "spbtn 103,103");
         exec(state, "btnwait %1");
-        assertEquals(java.util.Collections.singletonList("Button 103"), listener.lastChoices);
+        assertTrue(listener.lastChoices == null || listener.lastChoices.isEmpty());
+        // "btnwait" with nothing registered still blocks for a plain tap (see that handler's own
+        // doc), it doesn't silently fall through.
+        assertEquals(VnEngine.State.WAITING_TAP, state.runState);
     }
 
     @Test
@@ -415,6 +449,90 @@ public class NsCommandDispatcherTest {
         exec(state, "spbtn 49,49");
         exec(state, "btnwait %1");
         assertEquals(java.util.Collections.singletonList("hajime"), listener.lastChoices);
+    }
+
+    @Test
+    public void spbtnOffersTheLspImageAlongsideTheTextChoiceMenu() {
+        // A real host wants to render the actual button graphic (see ReaderActivity's split
+        // image/text choice layout), not just the filename-derived text fallback -- "spbtn" should
+        // carry the same resolved image file "lsp" loaded at that layer through to "btnwait"'s
+        // onChoices(options, images) call.
+        NsExecState state = new NsExecState();
+        exec(state, "lsp 49,\":a/2,0,3;dat\\menu\\hajime.jpg\",410,80");
+        exec(state, "spbtn 49,49");
+        exec(state, "btnwait %1");
+        assertEquals(java.util.Collections.singletonList(new File(vnDir, "dat/menu/hajime.jpg")),
+                listener.lastChoiceImages);
+    }
+
+    @Test
+    public void spbtnOffersNoImageForATextLabeledButton() {
+        // A "lsp"-":s/…;…" text-sprite button has no real image of its own, unlike a plain
+        // image-sprite one (see spbtnOffersTheLspImageAlongsideTheTextChoiceMenu above).
+        NsExecState state = new NsExecState();
+        exec(state, "lsp 1,\":s/36,38,0;#FFFFFF`Start game\",565,430");
+        exec(state, "spbtn 1,1");
+        exec(state, "btnwait %1");
+        assertEquals(java.util.Collections.singletonList("Start game"), listener.lastChoices);
+        assertEquals(java.util.Collections.singletonList(null), listener.lastChoiceImages);
+    }
+
+    @Test
+    public void lsphLoadsTheImageWithoutShowingItYet() {
+        // Real ONScripter-EN dispatches "lsp" and "lsph" from the exact same lspCommand, differing
+        // only in initial visibility -- "lsph" loads the image into the sprite slot right away (so
+        // a following "spbtn" on that layer can register a real button for it) but does NOT display
+        // it, unlike "lsp". A real pattern this backs: a "close menu" icon "lsph"-loaded once at
+        // menu setup, only actually revealed later via "vsp" once some prerequisite state is set.
+        NsExecState state = new NsExecState();
+        exec(state, "lsph 6,\"dat\\system\\close.jpg\",100,200");
+        assertTrue(listener.spriteFiles.isEmpty()); // not shown yet
+        exec(state, "spbtn 6,6");
+        exec(state, "btnwait %1");
+        // But the button DOES register -- the image was loaded, just not displayed.
+        assertEquals(java.util.Collections.singletonList(6), state.pendingChoiceButtonIds);
+    }
+
+    @Test
+    public void vspRevealsALsphLoadedSpriteAtItsOriginalPosition() {
+        NsExecState state = new NsExecState();
+        exec(state, "lsph 6,\"dat\\system\\close.jpg\",100,200");
+        exec(state, "vsp 6,1");
+        assertEquals(new File(vnDir, "dat/system/close.jpg"),
+                listener.spriteFiles.get(listener.spriteFiles.size() - 1));
+        int[] xy = listener.spriteLayersXY.get(listener.spriteLayersXY.size() - 1);
+        assertEquals(6, xy[0]);
+        assertEquals(100, xy[1]);
+        assertEquals(200, xy[2]);
+    }
+
+    @Test
+    public void vspWithZeroHidesTheSprite() {
+        NsExecState state = new NsExecState();
+        exec(state, "lsp 6,\"dat\\system\\close.jpg\",100,200"); // shown immediately
+        exec(state, "vsp 6,0");
+        assertEquals(Integer.valueOf(6), listener.clearedLayers.get(listener.clearedLayers.size() - 1));
+    }
+
+    @Test
+    public void vspOnALayerNeverLoadedIsANoOp() {
+        NsExecState state = new NsExecState();
+        exec(state, "vsp 6,1");
+        assertTrue(listener.spriteFiles.isEmpty());
+    }
+
+    @Test
+    public void spbtnOnALayerLoadedOnlyViaLsphStillRegistersTheButton() {
+        // The scenario "spbtnOnALayerNeverLspdRegistersNoButtonAtAll" is guarding against: a real
+        // "close menu" button is commonly "lsph"-loaded (image ready, but hidden) rather than "lsp",
+        // and must still be clickable even before any "vsp" reveals it -- real ONScripter's own
+        // spbtnCommand only checks whether an image was ever loaded (num_of_cells), never visibility.
+        NsExecState state = new NsExecState();
+        exec(state, "lsph 6,\"dat\\system\\close.jpg\",100,200");
+        exec(state, "spbtn 6,6");
+        exec(state, "btnwait %1");
+        assertEquals(VnEngine.State.WAITING_CHOICE, state.runState);
+        assertEquals(java.util.Collections.singletonList(6), state.pendingChoiceButtonIds);
     }
 
     @Test
@@ -572,6 +690,53 @@ public class NsCommandDispatcherTest {
     }
 
     @Test
+    public void playWithABareFilenamePlaysItDirectly() {
+        // Real ONScripter-EN's "play"/"playonce" also accept a plain filename (its sequenced-MIDI-
+        // music fallback) instead of a "*N" CD-track reference -- see NsCommandDispatcher's "play"
+        // handler doc.
+        NsExecState state = new NsExecState();
+        exec(state, "play theme.mid");
+        assertEquals(new File(vnDir, "theme.mid"), listener.lastMusic);
+    }
+
+    @Test
+    public void playstopStopsMusic() {
+        NsExecState state = new NsExecState();
+        exec(state, "bgm theme.mp3");
+        exec(state, "playstop");
+        assertTrue(listener.musicStopped);
+    }
+
+    @Test
+    public void playWithAStarTrackNumberResolvesToARealCdTrackFile() throws IOException {
+        // "play \"*9\"" is real ONScripter-EN's CD-DA track command: without a real CD drive, it
+        // falls back to a "cd\trackNN.mp3"/".ogg"/".wav" file (checked in that order -- see
+        // NsCommandDispatcher's "play" handler doc). Uses a real temp dir (unlike this test class's
+        // usual fake vnDir) since the handler only calls onMusic once it's confirmed the candidate
+        // file actually exists.
+        File realVnDir = tmp.newFolder("vn");
+        File cdDir = new File(realVnDir, "cd");
+        cdDir.mkdirs();
+        File track = new File(cdDir, "track09.ogg");
+        try (FileOutputStream out = new FileOutputStream(track)) {
+            out.write(new byte[]{1, 2, 3});
+        }
+
+        NsExecState state = new NsExecState();
+        NsCommandDispatcher.execute(NsTokenizer.classify("play \"*9\""), state, listener, realVnDir);
+        assertEquals(track, listener.lastMusic);
+    }
+
+    @Test
+    public void playWithAStarTrackNumberThatHasNoMatchingFileDoesNotCallOnMusic() throws IOException {
+        File realVnDir = tmp.newFolder("vn2");
+        NsExecState state = new NsExecState();
+        NsCommandDispatcher.execute(NsTokenizer.classify("play \"*9\""), state, listener, realVnDir);
+        assertNull(listener.lastMusic);
+        assertFalse(listener.musicStopped);
+    }
+
+    @Test
     public void mp3AndItsVariantsAllPlayMusicJustLikeBgm() {
         // Real ONScripter-EN binds "bgm"/"bgmonce"/"mp3"/"mp3loop"/"mp3save" ALL to the exact same
         // command -- they only differ in a
@@ -652,6 +817,62 @@ public class NsCommandDispatcherTest {
     }
 
     @Test
+    public void inlineTextSpeedCodeWithTrailingTextShowsTheRemainderAsDialogue() {
+        // A real, observed pattern (the_poor_little_bird's own script): "!s100/" -- real
+        // ONScripter's own digit-reading loop for "!s<N>" stops at the first non-digit character
+        // and keeps reading/displaying whatever comes after as ordinary text; it never requires the
+        // code to be the WHOLE line. Before this was recognized, requiring an exact whole-line
+        // match rejected the match entirely, showing the literal "!s100/" text instead of setting
+        // the pace (a no-op here either way) and displaying the real trailing "/".
+        NsExecState state = new NsExecState();
+        state.runState = VnEngine.State.RUNNING;
+        exec(state, "!s100/");
+        assertEquals(java.util.Collections.singletonList("/"), listener.textLines);
+    }
+
+    @Test
+    public void bareInlineDelayCodeAloneOnALineIsARealNoOp() {
+        // "!d" (no digits, unlike "!w<N>") has no host surface either way -- it must still be
+        // recognized as the real code (not shown as literal "!d" dialogue) when used the normal
+        // way real scripts do: alone, its own whole tag.
+        NsExecState state = new NsExecState();
+        state.runState = VnEngine.State.RUNNING;
+        exec(state, "!d");
+        assertEquals(VnEngine.State.RUNNING, state.runState);
+        assertTrue(listener.textLines.isEmpty());
+    }
+
+    @Test
+    public void dialogueStartingWithBangDLetterIsNeverMistakenForTheBareDelayCode() {
+        // The zero-digit "!d" code has no digit run of its own to bound where it ends -- unlike
+        // "!s100/", which stops unambiguously at the first non-digit -- so a widened regex that
+        // let ANY trailing text follow "!d" the same way silently swallowed the "!d"/"!D" off the
+        // front of ordinary dialogue that just happens to start that way, showing a truncated
+        // remainder instead of the real line.
+        NsExecState state = new NsExecState();
+        state.runState = VnEngine.State.RUNNING;
+        exec(state, "!Dad, look out!");
+        assertEquals(java.util.Collections.singletonList("!Dad, look out!"), listener.textLines);
+    }
+
+    @Test
+    public void dialogueStartingWithBangDLowercaseWordIsAlsoNeverMistaken() {
+        NsExecState state = new NsExecState();
+        state.runState = VnEngine.State.RUNNING;
+        exec(state, "!dark");
+        assertEquals(java.util.Collections.singletonList("!dark"), listener.textLines);
+    }
+
+    @Test
+    public void bareInlineTextSpeedDefaultCodeIsNeverMistakenEitherWhenGluedToLetters() {
+        // "!sd" has the exact same zero-digit ambiguity as "!d" -- same fix, same guard.
+        NsExecState state = new NsExecState();
+        state.runState = VnEngine.State.RUNNING;
+        exec(state, "!sdeath");
+        assertEquals(java.util.Collections.singletonList("!sdeath"), listener.textLines);
+    }
+
+    @Test
     public void btnRegistersAClickableButtonJustLikeSpbtn() {
         // The original, simplest button-registration idiom -- a rectangular region cropped from the
         // single "btndef"-loaded
@@ -663,6 +884,51 @@ public class NsCommandDispatcherTest {
         exec(state, "btnwait2 %0");
         assertEquals(VnEngine.State.WAITING_CHOICE, state.runState);
         assertEquals(java.util.Arrays.asList(1, 2), state.pendingChoiceButtonIds);
+    }
+
+    @Test
+    public void btnWithoutAnyBtndefLoadedGetsNoImageOrCropJustTheGenericLabel() {
+        // The pre-existing fallback for a game that uses "btn" without ever calling "btndef" (or
+        // after "btndef clear") -- there's genuinely nothing to crop from, so this must stay a
+        // plain, imageless "Button N" entry rather than crash or fabricate a crop rectangle.
+        NsExecState state = new NsExecState();
+        exec(state, "btn 1,232,517,98,40,232,517");
+        exec(state, "btnwait2 %0");
+        assertEquals(java.util.Collections.singletonList("Button 1"), listener.lastChoices);
+        assertEquals(java.util.Collections.singletonList((File) null), listener.lastChoiceImages);
+        assertEquals(java.util.Collections.singletonList((int[]) null), listener.lastChoiceImageCropRects);
+    }
+
+    @Test
+    public void btnAfterBtndefCropsItsOwnRectangleOutOfTheSharedButtonSheetImage() {
+        // The real fix this test guards: a plain "btn"-only menu (a common pattern for a game's own
+        // title/system-menu chrome, e.g. Kagetsu Tohya's own -- see NsCommandDispatcher's "btn"
+        // handler doc) has no "spbtn"-style per-layer sprite of its own at all -- its ENTIRE visible
+        // appearance is a crop of the single "btndef"-loaded image, at its own declared
+        // (srcX,srcY,w,h). Before "btndef" was implemented, every such button fell back to a bare
+        // "Button N" placeholder with no image whatsoever, regardless of how the real game actually
+        // looks.
+        NsExecState state = new NsExecState();
+        exec(state, "btndef \"dat\\system\\amenu.bmp\"");
+        exec(state, "btn 1,12,405,150,34,12,405");
+        exec(state, "btn 2,178,405,150,34,178,405");
+        exec(state, "btnwait2 %0");
+        assertEquals(2, listener.lastChoiceImages.size());
+        File expectedImage = listener.lastChoiceImages.get(0);
+        assertEquals(expectedImage, listener.lastChoiceImages.get(1));
+        assertArrayEquals(new int[]{12, 405, 150, 34}, listener.lastChoiceImageCropRects.get(0));
+        assertArrayEquals(new int[]{178, 405, 150, 34}, listener.lastChoiceImageCropRects.get(1));
+    }
+
+    @Test
+    public void btndefClearStopsFurtherBtnButtonsFromCroppingTheOldImage() {
+        NsExecState state = new NsExecState();
+        exec(state, "btndef \"dat\\system\\amenu.bmp\"");
+        exec(state, "btndef clear");
+        exec(state, "btn 1,12,405,150,34,12,405");
+        exec(state, "btnwait2 %0");
+        assertEquals(java.util.Collections.singletonList((File) null), listener.lastChoiceImages);
+        assertEquals(java.util.Collections.singletonList((int[]) null), listener.lastChoiceImageCropRects);
     }
 
     @Test
@@ -716,12 +982,98 @@ public class NsCommandDispatcherTest {
     }
 
     @Test
+    public void aBareStringVariableLineShowsItsResolvedValueNotTheLiteralReference() {
+        // A real, common NScripter name-tag idiom (plain_song_christmas_special's own script): the
+        // author sets a string variable once ("mov $1,\"Ryuuji\"") then uses that same bare "$1" as
+        // its own whole line right before each of that character's dialogue lines -- combined with
+        // a "setwindow" carving out a separate name-box region, this is how the name tag renders at
+        // all. Before this was evaluated, such a line showed the literal, unresolved "$1" text.
+        NsExecState state = new NsExecState();
+        state.runState = VnEngine.State.RUNNING;
+        exec(state, "mov $1,\"Ryuuji\"");
+        exec(state, "$1");
+        assertEquals(java.util.Collections.singletonList("Ryuuji"), listener.textLines);
+    }
+
+    @Test
+    public void aWholeLineThatLooksLikeABareStringVariableButWasNeverAssignedStaysLiteral() {
+        // "$5" has the exact same shape as a real name-tag reference (see the test above), but a
+        // literal price/code line like this was never assigned via "mov"/"stralias" first -- it
+        // must be shown as-is, not silently resolved to strVars' own "" default for an unset slot
+        // (or, worse, some unrelated earlier value that slot happens to hold).
+        NsExecState state = new NsExecState();
+        state.runState = VnEngine.State.RUNNING;
+        exec(state, "$5");
+        assertEquals(java.util.Collections.singletonList("$5"), listener.textLines);
+    }
+
+    @Test
+    public void aDollarSignEmbeddedMidSentenceIsLeftAsLiteralText() {
+        // Deliberately narrow: only a line that's NOTHING BUT the bare reference gets resolved --
+        // '$' appearing mid-sentence (e.g. an incidental price mentioned in prose) is not a pattern
+        // this handles, to avoid misreading ordinary dialogue.
+        NsExecState state = new NsExecState();
+        state.runState = VnEngine.State.RUNNING;
+        exec(state, "It costs $1 at the store.");
+        assertEquals(java.util.Collections.singletonList("It costs $1 at the store."), listener.textLines);
+    }
+
+    @Test
+    public void inlineColorCodeIsStrippedNotShownAsLiteralText() {
+        // Real NScripter/ONScripter dialogue can embed a "#RRGGBB" inline control code ANYWHERE to
+        // change the current text color (see ONScripterLabel_text.cpp's "ch == '#'" branch in the
+        // real source) -- it consumes exactly 6 hex digits and produces no visible characters of
+        // its own. A real, observed case (my_black_cat's own opening line): a WHOLE line consisting
+        // of nothing but "#ffffff" right after a screen-clearing "bg black" transition, meant only
+        // to set the color white for the dialogue that follows. Before this was stripped, nothing
+        // in this pipeline treated '#' as special, so it printed as literal "#ffffff" dialogue.
+        NsExecState state = new NsExecState();
+        state.runState = VnEngine.State.RUNNING;
+        exec(state, "#ffffff");
+        assertTrue("a color-code-only line produces no visible text", listener.textLines.isEmpty());
+
+        exec(state, "#ff0000Hello there");
+        assertEquals("Hello there", listener.textLines.get(0));
+    }
+
+    @Test
+    public void aHashNotFollowedBySixHexDigitsIsLiteralText() {
+        // Real ONScripter's own "#" handling only treats it as a color code when EXACTLY 6 valid
+        // hex digits immediately follow -- anything else (too few digits, non-hex characters) falls
+        // through as an ordinary literal '#' character instead.
+        NsExecState state = new NsExecState();
+        state.runState = VnEngine.State.RUNNING;
+        exec(state, "#1 best friend");
+        assertEquals("#1 best friend", listener.textLines.get(0));
+    }
+
+    @Test
     public void plainDialogueAutoContinuesWithoutWaiting() {
         NsExecState state = new NsExecState();
         state.runState = VnEngine.State.RUNNING;
         exec(state, "Just a caption");
         assertEquals("Just a caption", listener.textLines.get(0));
         assertEquals(VnEngine.State.RUNNING, state.runState); // untouched: no wait triggered
+    }
+
+    @Test
+    public void aStrayLeadingColonAfterAnIfConditionIsSkippedNotShownAsDialogue() {
+        // A real, observed pattern (night_of_the_forget_me_nots' own title-menu loop):
+        // "if %10<=0 :goto *title2" -- a stray colon sits right after the condition, before the
+        // real consequent command. Real ONScripter's own ifCommand just returns RET_CONTINUE and
+        // lets the ordinary dispatch loop read whatever comes next (colon included) the same way it
+        // tolerates an empty segment between two chained commands -- so "goto" still runs. Before
+        // this was handled, the leading, non-lowercase ':' made the whole consequent ("...goto
+        // *title2") get misread as one literal dialogue line, so the goto never fired at all --
+        // a menu loop relying on it to return to the title screen on an empty click got stuck
+        // showing raw ":goto *title2" text forever instead.
+        NsExecState state = new NsExecState();
+        state.labelIndex.put("title2", 500);
+        state.numVars.put(10, 0L);
+        state.pc = 5;
+        exec(state, "if %10<=0 :goto *title2");
+        assertEquals(500, state.pc);
+        assertTrue("must not show the raw chain syntax as dialogue", listener.textLines.isEmpty());
     }
 
     @Test
@@ -858,15 +1210,45 @@ public class NsCommandDispatcherTest {
         state.numVars.put(1, 42L);
         state.strVars.put(2, "x");
         state.callStack.push(3);
-        state.pendingButtonLabels.add("Yes");
-        state.pendingButtonIds.add(144);
+        state.pendingButtons.add(new NsExecState.ButtonEntry("Yes", 144, null,
+                VnEngine.SpriteTransparency.OPAQUE, 1, null, NsExecState.ButtonEntry.Source.SPBTN));
         exec(state, "reset");
         assertEquals(7, state.pc);
         assertTrue(state.numVars.isEmpty());
         assertTrue(state.strVars.isEmpty());
         assertTrue(state.callStack.isEmpty());
-        assertTrue(state.pendingButtonLabels.isEmpty());
-        assertTrue(state.pendingButtonIds.isEmpty());
+        assertTrue(state.pendingButtons.isEmpty());
+    }
+
+    @Test
+    public void resetAlsoClearsThePendingButtonImageAndCselButtonLists() {
+        // Before this was fixed, "reset" cleared pendingButtonLabels/pendingButtonIds but left the
+        // newer parallel pendingButtonImage*/pendingCselButton*/lastChoiceImage* lists untouched --
+        // a confirm-dialog "Yes -> reset" idiom firing while spbtn-registered image buttons (or a
+        // pending csel choice) were in flight left those lists desynced index-for-index with the
+        // labels/ids that DID get cleared, so the next spbtn/btnwait zipped new labels against
+        // stale, wrong images. Now backed by one NsExecState.pendingButtons list, so this can only
+        // ever desync with itself -- kept as a regression test for the underlying behavior anyway.
+        NsExecState state = new NsExecState();
+        state.startPc = 7;
+        exec(state, "lsp 1,\":a/2,0,3;May\\System\\Button_for_Title_Text.jpg\",74,274");
+        exec(state, "spbtn 1,1");
+        exec(state, "csel \"Coffee\",*coffee");
+        exec(state, "cselbtn 0,150,34,40");
+        exec(state, "reset");
+        assertTrue(state.pendingButtons.isEmpty());
+        assertNull(state.lastChoiceImages);
+        assertNull(state.lastChoiceImageTransparencies);
+        assertNull(state.lastChoiceImageAlphaMaskCells);
+        assertNull(state.lastChoiceImageCropRects);
+
+        // The next spbtn registration after reset must start from a clean slate, not append onto
+        // stale leftovers.
+        exec(state, "lsp 1,\":a/2,0,3;May\\System\\Button_for_Title_Text.jpg\",74,274");
+        exec(state, "spbtn 1,9");
+        exec(state, "btnwait %0");
+        assertEquals(1, state.pendingChoiceButtonIds.size());
+        assertEquals(9, state.pendingChoiceButtonIds.get(0).intValue());
     }
 
     @Test
@@ -982,12 +1364,14 @@ public class NsCommandDispatcherTest {
         // system menu's own button-wait loop; before this was recognized, it silently no-op'd
         // instead of blocking, so that menu's click was never actually captured.
         NsExecState state = new NsExecState();
+        exec(state, "lsp 1,\":s/36,38,0;#FFFFFF`Option\",565,430");
         exec(state, "spbtn 1,7");
         exec(state, "btnwait2 %1");
         assertEquals(VnEngine.State.WAITING_CHOICE, state.runState);
         assertEquals(java.util.Collections.singletonList(7), state.pendingChoiceButtonIds);
 
         NsExecState state2 = new NsExecState();
+        exec(state2, "lsp 1,\":s/36,38,0;#FFFFFF`Option\",565,430");
         exec(state2, "spbtn 1,7");
         exec(state2, "textbtnwait %1");
         assertEquals(VnEngine.State.WAITING_CHOICE, state2.runState);
@@ -1025,6 +1409,100 @@ public class NsCommandDispatcherTest {
     }
 
     @Test
+    public void realCselChoiceIsShownAloneEvenWithASystemToolbarRegisteredAlongsideIt() {
+        // A real, very common pattern: a persistent system toolbar (quick-save/quick-load/menu/
+        // backlog/skip/auto/help icons) is registered via plain "spbtn" from a shared subroutine
+        // gosub'd right before nearly every blocking wait in a script, INCLUDING right before a
+        // real "csel"-declared narrative choice's own "selectbtnwait" (see
+        // NsExecState.pendingCselButtonLabels's doc). Before this was fixed, both groups fed the
+        // same flat choice list, so a real 2-option decision like "Coffee" vs "Sports drink" showed
+        // up buried among 8+ unrelated toolbar buttons with no way to tell which was which.
+        NsExecState state = new NsExecState();
+        exec(state, "lsp 111,\":s/12,12,0;#8888aa#FFFF66Q.SAVE\",220,450");
+        exec(state, "spbtn 111,116"); // toolbar button, NOT part of the real choice
+        exec(state, "csel \"Coffee\",*coffee,\"Sports drink\",*sports");
+        exec(state, "cselbtn 0,150,34,40");
+        exec(state, "cselbtn 1,151,34,64");
+        exec(state, "selectbtnwait %1");
+        assertEquals(java.util.Arrays.asList("Coffee", "Sports drink"), listener.lastChoices);
+        assertEquals(java.util.Arrays.asList(150, 151), state.pendingChoiceButtonIds);
+    }
+
+    @Test
+    public void plainSpbtnMenuStillWorksWhenNoCselChoiceIsPending() {
+        // The title screen's own "hajime"/"tuduki"/"syuuryou" menu, say -- no "csel" involved at
+        // all -- must still work exactly as before: real ONScripter-compliant behavior for THAT
+        // screen is showing the plain "spbtn" list, not an empty one.
+        NsExecState state = new NsExecState();
+        exec(state, "lsp 49,\":a/2,0,3;dat\\menu\\hajime.jpg\",410,80");
+        exec(state, "spbtn 49,49");
+        exec(state, "btnwait %1");
+        assertEquals(java.util.Collections.singletonList("hajime"), listener.lastChoices);
+    }
+
+    @Test
+    public void spbtnButtonsSharingOneFallbackLabelGetDisambiguatedWithAPositionalSuffix() {
+        // A real pattern (May Sky's own title menu): several "spbtn" buttons all "lsp"-load the
+        // exact SAME shared placeholder/highlight-only image at different screen positions, with
+        // the real "Start"/"Load"/"Extra"-style art baked into a separate sprite this host has no
+        // way to associate back to any one button (see spbtnHandler's own doc on the fileNameHint
+        // fallback). Before disambiguateDuplicateLabels existed, all three buttons showed the
+        // literal same text ("Button_for_Title_Text") with nothing at all to tell them apart.
+        NsExecState state = new NsExecState();
+        exec(state, "lsp 1,\":a/2,0,3;May\\System\\Button_for_Title_Text.jpg\",74,274");
+        exec(state, "lsp 2,\":a/2,0,3;May\\System\\Button_for_Title_Text.jpg\",74,332");
+        exec(state, "lsp 3,\":a/2,0,3;May\\System\\Button_for_Title_Text.jpg\",74,388");
+        exec(state, "spbtn 1,1");
+        exec(state, "spbtn 2,2");
+        exec(state, "spbtn 3,3");
+        exec(state, "btnwait %0");
+        assertEquals(java.util.Arrays.asList(
+                        "Button_for_Title_Text (1)", "Button_for_Title_Text (2)", "Button_for_Title_Text (3)"),
+                listener.lastChoices);
+    }
+
+    @Test
+    public void selectDisambiguatesTwoIdenticalOptionTextsTheSameWaySpbtnDoes() {
+        // "select"/"selgosub" option text is normally real script-authored text, so this rarely
+        // fires -- but a script can genuinely author (or variable-substitute into) two identical
+        // option strings, and the player deserves the exact same "(N)" disambiguation an
+        // spbtn-derived placeholder collision already gets, not two indistinguishable buttons just
+        // because the source of the text was different.
+        NsExecState state = new NsExecState();
+        exec(state, "select \"Yes\",*yes1,\"Yes\",*yes2");
+        assertEquals(java.util.Arrays.asList("Yes (1)", "Yes (2)"), listener.lastChoices);
+        // Jump targets must stay aligned by index with the (now-suffixed) option text.
+        assertEquals("yes1", state.pendingChoiceLabels.get(0));
+        assertEquals("yes2", state.pendingChoiceLabels.get(1));
+    }
+
+    @Test
+    public void selgosubDisambiguatesTwoIdenticalOptionTextsTheSameWaySelectDoes() {
+        NsExecState state = new NsExecState();
+        exec(state, "selgosub \"Yes\",*yes1,\"Yes\",*yes2");
+        assertEquals(java.util.Arrays.asList("Yes (1)", "Yes (2)"), listener.lastChoices);
+        assertEquals("yes1", state.pendingChoiceLabels.get(0));
+        assertEquals("yes2", state.pendingChoiceLabels.get(1));
+    }
+
+    @Test
+    public void spbtnButtonImageCarriesTheSameRealTransparencyTagItsOwnLspLoadHad() {
+        // A button's image is just the layer's own "lsp"-loaded sprite (see spbtn's own doc) -- it
+        // must carry the SAME real transparency treatment (here, a 2-cell ":a/2,0,3;" alpha mask,
+        // the actual real-world tag on a_dream_of_summer's own title-screen "hajime" button) a host
+        // rendering it would need, not get shown as a raw, untreated rectangle. Before
+        // NsExecState.pendingButtonImageTransparencies existed, onChoices had no way to carry this
+        // at all -- every button image was implicitly OPAQUE regardless of its real tag.
+        NsExecState state = new NsExecState();
+        exec(state, "lsp 49,\":a/2,0,3;dat\\menu\\hajime.jpg\",410,80");
+        exec(state, "spbtn 49,49");
+        exec(state, "btnwait %1");
+        assertEquals(java.util.Collections.singletonList(VnEngine.SpriteTransparency.ALPHA_MASK),
+                listener.lastChoiceImageTransparencies);
+        assertEquals(java.util.Collections.singletonList(2), listener.lastChoiceImageAlphaMaskCells);
+    }
+
+    @Test
     public void cselbtnFeedsThePendingChoiceMenu() {
         NsExecState state = new NsExecState();
         exec(state, "csel \"Yes\",*yes,\"Option 2\",*opt2");
@@ -1046,6 +1524,49 @@ public class NsCommandDispatcherTest {
         exec(state, "selectbtnwait %1");
         assertTrue(state.pendingChoiceButtonIds.isEmpty());
         assertEquals(VnEngine.State.WAITING_TAP, state.runState); // blocks anyway, see btnwaitHandler
+    }
+
+    @Test
+    public void getversionReportsAVersionHighEnoughToPassARealMinimumVersionGate() {
+        // Almost every professionally-packaged NScripter/ONScripter game opens its own "*start"
+        // with "getversion %v:if %v>=192 jumpf" (or similar) as a self-check, falling through to a
+        // "your interpreter is too old, get a newer one"+"end" if it fails -- a real, near-
+        // universal idiom (e.g. Kagetsu Tohya's own "*start": "getversion %version:if
+        // %version>=192 jumpf"). Before "getversion" was implemented, it silently no-op'd, so the
+        // target variable kept its default value of 0 -- "0 >= 192" is always false, so EVERY real
+        // game using this idiom hit its own "too old" error and quit on its very first line, before
+        // a single frame of actual content ever ran. This reports 294 (matching real ONScripter-EN's
+        // own NSC_VERSION), comfortably clearing any real minimum-version check.
+        NsExecState state = new NsExecState();
+        exec(state, "getversion %1");
+        assertTrue(state.numVars.get(1) >= 192);
+    }
+
+    @Test
+    public void rndSetsVariableToARandomValueInZeroToMaxMinusOne() {
+        // Real ONScripter-EN's own rndCommand: "rnd var,max" -> var in [0, max-1] -- a real,
+        // common use is picking one of several random flavor-text/encounter variants (e.g. Kagetsu
+        // Tohya's own daily "horoscope": "rnd %msgno,218" picks 1 of 218 messages, paired with
+        // "if %msgno==%lastmsgno0 skip -1" retrying if it repeats one of the last few shown).
+        // Before "rnd" was implemented, it silently no-op'd -- the target variable was simply never
+        // written, so a real anti-repeat retry loop like that compared the SAME never-changing
+        // default (0) against itself forever: an infinite loop that never produced a message.
+        NsExecState state = new NsExecState();
+        for (int i = 0; i < 50; i++) {
+            exec(state, "rnd %1,5");
+            long v = state.numVars.get(1);
+            assertTrue("expected 0<=v<5, got " + v, v >= 0 && v < 5);
+        }
+    }
+
+    @Test
+    public void rnd2SetsVariableToARandomValueInAnExplicitInclusiveRange() {
+        NsExecState state = new NsExecState();
+        for (int i = 0; i < 50; i++) {
+            exec(state, "rnd2 %1,10,12");
+            long v = state.numVars.get(1);
+            assertTrue("expected 10<=v<=12, got " + v, v >= 10 && v <= 12);
+        }
     }
 
     @Test

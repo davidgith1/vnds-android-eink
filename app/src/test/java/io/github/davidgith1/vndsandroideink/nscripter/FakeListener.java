@@ -29,6 +29,9 @@ final class FakeListener implements VnEngine.Listener {
     boolean musicStopped;
     List<String> lastChoices;
     List<File> lastChoiceImages;
+    List<VnEngine.SpriteTransparency> lastChoiceImageTransparencies;
+    List<Integer> lastChoiceImageAlphaMaskCells;
+    List<int[]> lastChoiceImageCropRects;
     int lastDelayFrames = -1;
     final Map<String, String> globals = new HashMap<>();
     boolean finished = false;
@@ -98,6 +101,26 @@ final class FakeListener implements VnEngine.Listener {
     public void onChoices(List<String> options, List<File> images) {
         lastChoices = options;
         lastChoiceImages = images;
+    }
+
+    @Override
+    public void onChoices(List<String> options, List<File> images,
+                           List<VnEngine.SpriteTransparency> imageTransparencies, List<Integer> imageAlphaMaskCells) {
+        lastChoices = options;
+        lastChoiceImages = images;
+        lastChoiceImageTransparencies = imageTransparencies;
+        lastChoiceImageAlphaMaskCells = imageAlphaMaskCells;
+    }
+
+    @Override
+    public void onChoices(List<String> options, List<File> images,
+                           List<VnEngine.SpriteTransparency> imageTransparencies, List<Integer> imageAlphaMaskCells,
+                           List<int[]> imageCropRects) {
+        lastChoices = options;
+        lastChoiceImages = images;
+        lastChoiceImageTransparencies = imageTransparencies;
+        lastChoiceImageAlphaMaskCells = imageAlphaMaskCells;
+        lastChoiceImageCropRects = imageCropRects;
     }
 
     @Override

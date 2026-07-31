@@ -28,7 +28,11 @@ local.properties
 # Editor / assistant local state.
 .claude/
 *.kate-swp
-/CLAUDE.md
+
+# Local notes/docs (session findings, testing logs, etc.) -- not part of the published repo.
+# README.md is the only markdown file that IS published.
+*.md
+!/README.md
 
 # Release-signing secrets -- never commit a keystore or its passwords.
 /keystore.properties

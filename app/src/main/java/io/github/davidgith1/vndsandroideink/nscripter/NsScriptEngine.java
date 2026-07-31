@@ -277,10 +277,14 @@ public final class NsScriptEngine implements VnEngine {
         state.barewordConstants.putAll(snapshot.barewordConstants);
         state.nsaDir = snapshot.nsaDir;
         state.callStack.clear();
+        state.callStackChainRemainder.clear();
         // Push back-to-front so the resulting stack's pop order matches what was snapshotted
-        // (the snapshot list is top-of-stack-first; push() adds to the top).
+        // (the snapshot list is top-of-stack-first; push() adds to the top). A restored save never
+        // carries a mid-chain remainder (see NsExecState.callStackChainRemainder's own doc on why
+        // that's not persisted) -- every restored frame falls through to its plain pc on return.
         for (int i = snapshot.callStack.size() - 1; i >= 0; i--) {
             state.callStack.push(snapshot.callStack.get(i));
+            state.callStackChainRemainder.push("");
         }
         state.pendingPageClearOnResume = snapshot.pendingPageClearOnResume;
         state.pendingDialogueRemainder = snapshot.pendingDialogueRemainder;
@@ -315,15 +319,35 @@ public final class NsScriptEngine implements VnEngine {
                 return; // hit another '@'/'\' -- stay put until the next tap
             }
         }
-        runLoop();
+        resumeChainOrRunLoop();
     }
 
     @Override
     public void resumeFromDelay() {
         if (state.runState == State.WAITING_DELAY) {
             state.runState = State.RUNNING;
-            runLoop();
+            resumeChainOrRunLoop();
         }
+    }
+
+    /** Continues a {@link NsExecState#pendingChainRemainder} stashed by a mid-chain block (see its
+     * own doc -- almost always "wait", or "btnwait"-family with no buttons registered, resolving to
+     * a plain tap) before falling into the ordinary {@link #runLoop()}. A stale remainder left over
+     * from a genuine jump (goto/gosub/a real "select" resolution) is never resumed here: {@link
+     * NsCommandDispatcher#executeChain} only ever stashes one when {@code state.pc} did NOT move,
+     * and {@link #choose(int)}'s select/selgosub branch explicitly clears any leftover remainder
+     * itself before jumping, since real ONScripter's own cursor moving elsewhere supersedes
+     * whatever was left of the old line. */
+    private void resumeChainOrRunLoop() {
+        if (state.pendingChainRemainder != null) {
+            String remainder = state.pendingChainRemainder;
+            state.pendingChainRemainder = null;
+            NsCommandDispatcher.executeChain(remainder, state, listener, vnDir);
+            if (state.runState != State.RUNNING) {
+                return; // blocked again (e.g. another "wait" further down the same chain)
+            }
+        }
+        runLoop();
     }
 
     @Override
@@ -347,16 +371,32 @@ public final class NsScriptEngine implements VnEngine {
             state.pendingBtnwaitVarIndex = null;
             state.pendingChoiceButtonIds = new ArrayList<>();
             state.runState = State.RUNNING;
-            runLoop();
+            resumeChainOrRunLoop();
             return;
         }
+        // A real "select"/"selgosub" resolution always jumps (see below), unlike "btnwait" above --
+        // real ONScripter's own script cursor moving elsewhere supersedes whatever was left of the
+        // OLD line's ':'-chain (the same reason NsCommandDispatcher.executeChain itself never
+        // stashes a remainder across an actual pc jump), so any remainder stashed by "select"
+        // itself blocking mid-chain (an unusual but possible pattern) must be discarded here, not
+        // resumed -- plain runLoop(), not resumeChainOrRunLoop().
+        state.pendingChainRemainder = null;
         if (zeroBasedIndex >= 0 && zeroBasedIndex < state.pendingChoiceLabels.size()) {
             Integer dest = state.labelIndex.get(state.pendingChoiceLabels.get(zeroBasedIndex));
             if (dest != null) {
+                // "selgosub" (see NsCommandDispatcher's handler and NsExecState.pendingChoiceIsGosub's
+                // doc): push the current pc -- already sitting right after the whole select block,
+                // same position a "gosub" would push -- so the chosen branch's own "return" comes
+                // back here instead of popping some unrelated outer call.
+                if (state.pendingChoiceIsGosub) {
+                    state.callStack.push(state.pc);
+                    state.callStackChainRemainder.push("");
+                }
                 state.pc = dest;
             }
         }
         state.pendingChoiceLabels = new ArrayList<>();
+        state.pendingChoiceIsGosub = false;
         state.runState = State.RUNNING;
         runLoop();
     }
@@ -368,15 +408,21 @@ public final class NsScriptEngine implements VnEngine {
         }
         if (state.lastChoiceLabels != null) {
             state.pendingChoiceLabels = new ArrayList<>(state.lastChoiceLabels);
+            state.pendingChoiceIsGosub = state.lastChoiceIsGosub;
             state.pendingBtnwaitVarIndex = null;
             state.pendingChoiceButtonIds = new ArrayList<>();
         } else {
             state.pendingChoiceLabels = new ArrayList<>();
+            state.pendingChoiceIsGosub = false;
             state.pendingBtnwaitVarIndex = state.lastChoiceBtnwaitVarIndex;
             state.pendingChoiceButtonIds = new ArrayList<>(state.lastChoiceButtonIds);
         }
         state.runState = State.WAITING_CHOICE;
-        listener.onChoices(new ArrayList<>(state.lastChoiceOptionTexts));
+        listener.onChoices(new ArrayList<>(state.lastChoiceOptionTexts),
+                state.lastChoiceImages == null ? null : new ArrayList<>(state.lastChoiceImages),
+                state.lastChoiceImageTransparencies == null ? null : new ArrayList<>(state.lastChoiceImageTransparencies),
+                state.lastChoiceImageAlphaMaskCells == null ? null : new ArrayList<>(state.lastChoiceImageAlphaMaskCells),
+                state.lastChoiceImageCropRects == null ? null : new ArrayList<>(state.lastChoiceImageCropRects));
         return true;
     }
 

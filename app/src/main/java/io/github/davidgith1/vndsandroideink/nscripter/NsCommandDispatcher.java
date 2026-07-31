@@ -8,6 +8,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Random;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -21,6 +22,11 @@ public final class NsCommandDispatcher {
 
     private NsCommandDispatcher() {
     }
+
+    /** Backing RNG for "rnd"/"rnd2" -- a single shared instance (not seeded per-call), matching
+     * real ONScripter-EN's own libc rand() usage: one PRNG stream for the whole run, not
+     * reseeded/recreated per command. */
+    private static final Random RANDOM = new Random();
 
     /** "if"/"notif" condition syntax: an "operand OP operand" comparison, then whitespace, then the
      * consequent command to run when the condition holds -- e.g. "if %1==1 mov %2,3". Real scripts
@@ -55,9 +61,28 @@ public final class NsCommandDispatcher {
      * once, with no per-character output to interleave a mid-line pause into). Before this was
      * recognized, such a line fell through as plain dialogue text and was shown verbatim (e.g.
      * literally "!w2000" flashed on screen, permanently, since it has no '\\'/'@' marker of its own
-     * to ever stop waiting on) instead of pausing and moving on. */
+     * to ever stop waiting on) instead of pausing and moving on.
+     *
+     * <p>Group 4 captures whatever, if anything, follows the recognized "!w<N>"/"!d<N>"/"!s<N>"/
+     * "!sd" prefix on the SAME line -- a real, observed pattern (the_poor_little_bird's own
+     * "!s100/"): real ONScripter's own digit-reading loop for these codes (see
+     * ONScripterLabel_text.cpp's "ch == '!'" branch) stops at the first non-digit character and
+     * simply keeps reading/displaying whatever comes after as ordinary text -- it never requires
+     * the code to be the ENTIRE line. Requiring an exact whole-line match here (an earlier version
+     * of this dispatcher did) rejected such a line's real match entirely, showing the literal,
+     * unrecognized "!s100/" text instead of setting the pace and displaying the real trailing "/".
+     * See {@link #handleInlineWait}'s own doc for how the remainder is shown.
+     *
+     * <p>"!d"/"!sd" (no digits, unlike "!w<N>"/"!s<N>") have no digit run of their own to bound
+     * where the code ends and trailing text begins, so a bare "!d"/"!D" directly followed by a
+     * letter -- ordinary dialogue that just happens to start that way ("!Dad, look out!", "!dark",
+     * "!during", "!Damn it!") -- must NOT be treated as the zero-digit form of this code: the
+     * lookahead below requires a non-letter (or end of line) right after "d"/"sd" for the
+     * zero-digit case specifically, same as an unwidened whole-line match would have rejected it.
+     * A real "!d"/"!sd" is always used bare (its own whole tag, not glued to more text the way
+     * "!s100/" glues onto a digit boundary), so this costs nothing real scripts actually rely on. */
     private static final Pattern INLINE_WAIT =
-            Pattern.compile("^!(?:w(\\d+)|d(\\d*)|s(\\d+)|sd)$", Pattern.CASE_INSENSITIVE);
+            Pattern.compile("^!(?:w(\\d+)|d(\\d+|(?![A-Za-z]))|s(\\d+)|sd(?![A-Za-z]))(.*)$", Pattern.CASE_INSENSITIVE);
 
     private static final Map<String, NsCommandHandler> HANDLERS = buildHandlers();
 
@@ -78,21 +103,45 @@ public final class NsCommandDispatcher {
      * Real scripts chain multiple commands on one line with ':' (e.g. "dwave 1,\"se.wav\":gosub
      * *foo:goto *bar"), which {@link NsLine} doesn't
      * split on its own since a ':' can also legitimately appear inside a quoted argument. Runs each
-     * piece in order, stopping early if a piece blocks execution (a runState change) or jumps
-     * elsewhere (goto/gosub/return/jumpf changing {@code state.pc}) -- either way, whatever's left
-     * in the chain no longer applies.
+     * piece in order, stopping early if a piece jumps elsewhere (goto/gosub/return/jumpf/select
+     * changing {@code state.pc} -- whatever's left in the chain no longer applies, matching real
+     * ONScripter's own script cursor actually moving elsewhere) or blocks execution (a runState
+     * change with {@code state.pc} unchanged, e.g. "wait" or a "select"/"btnwait"-family command) --
+     * the latter case stashes whatever's left of the chain into {@link
+     * NsExecState#pendingChainRemainder} first, so {@link NsScriptEngine}'s resume methods can pick
+     * this exact line back up once unblocked, instead of skipping straight to the next one.
      *
      * <p>"if"/"notif" is special-cased <em>before</em> any colon-splitting: its own consequent may
      * itself contain further ':'-chained commands (e.g. "if %1==1 mov %2,7:goto *done"),
      * which must stay conditional on the "if", not get split off
      * as an unconditional sibling statement the way a naive upfront split would produce.
+     *
+     * <p>Package-private rather than private: {@link NsScriptEngine} calls this directly to resume
+     * a stashed {@link NsExecState#pendingChainRemainder}, which is just more chain text to run.
      */
-    private static void executeChain(String text, NsExecState state, VnEngine.Listener listener, File vnDir) {
+    static void executeChain(String text, NsExecState state, VnEngine.Listener listener, File vnDir) {
         String remaining = text;
         while (!remaining.isEmpty()) {
             String trimmedRemaining = remaining.trim();
             if (trimmedRemaining.isEmpty()) {
                 return;
+            }
+            if (trimmedRemaining.charAt(0) == ':') {
+                // A leading ':' with nothing before it is an EMPTY chain segment, not the start of
+                // real dialogue (no real prose sentence begins with a bare colon) -- a real,
+                // observed pattern: "if %10<=0 :goto *title2" (night_of_the_forget_me_nots' own
+                // script), where the stray colon right after the condition is real ONScripter's own
+                // tolerance for an empty statement before the real one (its ifCommand just returns
+                // RET_CONTINUE and lets the ordinary command dispatch loop read whatever comes
+                // next, colon included, the same way two chained commands' own separator would be
+                // skipped between them). Before this was handled, the classification check just
+                // below saw a leading, non-lowercase ':' and treated the WHOLE remaining text
+                // (colon, "goto", label, and all) as one literal dialogue line -- so the "goto"
+                // never ran at all, and a menu loop relying on it to escape (e.g. back to the title
+                // screen on an empty click) got stuck showing raw ":goto *title2"-style text forever
+                // instead of ever looping back.
+                remaining = trimmedRemaining.substring(1);
+                continue;
             }
             String cmd = commandNameOf(trimmedRemaining);
             if (cmd.equals("if") || cmd.equals("notif")) {
@@ -119,9 +168,30 @@ public final class NsCommandDispatcher {
                 continue;
             }
             int pcBefore = state.pc;
+            int callDepthBefore = state.callStack.size();
             VnEngine.State stateBefore = state.runState;
             runOneStatement(trimmedPart, state, listener, vnDir);
-            if (state.runState != stateBefore || state.pc != pcBefore) {
+            if (state.pc != pcBefore) {
+                if (state.callStack.size() > callDepthBefore && !remaining.isEmpty()) {
+                    // A "gosub"-style call (gosub/defsub-pseudo-command) mid-chain, not a plain
+                    // one-way jump: stash the rest of THIS line onto the frame it just pushed, so
+                    // "return" resumes it instead of falling through to the next physical line --
+                    // see NsExecState.callStackChainRemainder's own doc.
+                    state.callStackChainRemainder.pop();
+                    state.callStackChainRemainder.push(remaining);
+                    return;
+                }
+                return; // jumped elsewhere: the rest of this line's chain no longer applies
+            }
+            if (state.runState != stateBefore && state.runState != VnEngine.State.RUNNING
+                    && !remaining.isEmpty()) {
+                // Blocked mid-chain (e.g. "wait", or a "select"/"btnwait"-family command) with more
+                // of THIS line still left to run once unblocked -- see this method's own doc and
+                // NsExecState.pendingChainRemainder's.
+                state.pendingChainRemainder = remaining;
+                return;
+            }
+            if (state.runState != stateBefore) {
                 return;
             }
         }
@@ -231,6 +301,7 @@ public final class NsCommandDispatcher {
             Integer dest = state.labelIndex.get(line.firstToken());
             if (dest != null) {
                 state.callStack.push(state.pc);
+                state.callStackChainRemainder.push("");
                 state.pendingSubParams = new ArrayList<>(NsTokenizer.parseArgs(line.argsText()));
                 state.pc = dest;
             }
@@ -268,22 +339,35 @@ public final class NsCommandDispatcher {
      * {@link NsExecState#delaysEnabled} is on (e-ink/instant-text mode never blocks here either,
      * matching "wait"'s own tolerance). "!s"/"!sd" (text-display speed) has no host surface to
      * apply to -- e-ink mode is always instant, and non-eink typewriter speed is a host Prefs
-     * setting the script can't reach -- so it's a safe no-op. */
+     * setting the script can't reach -- so it's a safe no-op.
+     *
+     * <p>Whatever text (group 4) followed the recognized code on the same line -- e.g. the real
+     * "/" in "!s100/" -- is shown as ordinary dialogue right after. This host has no way to
+     * genuinely interleave a still-BLOCKING "!w"/"!d" pause with more text resuming afterward the
+     * way real ONScripter's own character-stream cursor does (unlike the non-blocking "!s"/"!sd"
+     * case, which is the one actually observed in a real script), so a remainder is simply shown
+     * immediately either way -- if a real pause also engaged, its own state.runState write (above)
+     * gets overwritten by whatever {@link NsDialogue#handle} itself decides for that remainder
+     * (e.g. WAITING_TAP for its own '@'/'\\' marker). An accepted, narrow imprecision for a
+     * combination ("!w"/"!d" WITH trailing same-line text) never actually seen in any tested game,
+     * versus getting the confirmed real "!s...text" case right. */
     private static void handleInlineWait(Matcher m, NsExecState state, VnEngine.Listener listener) {
         String ms = m.group(1) != null ? m.group(1) : m.group(2);
+        String remainder = m.group(4);
         if (ms == null) {
-            return; // "!s<N>"/"!sd": text-speed setting, no host surface, nothing to do
+            // "!s<N>"/"!sd": text-speed setting, no host surface, nothing to do beyond the
+            // remainder (if any) below.
+        } else if (state.delaysEnabled && !ms.isEmpty()) {
+            long millis = Long.parseLong(ms);
+            if (millis > 0) {
+                int frames = Math.round(millis * 60f / 1000f);
+                state.runState = VnEngine.State.WAITING_DELAY;
+                listener.onDelay(frames);
+            }
         }
-        if (!state.delaysEnabled || ms.isEmpty()) {
-            return;
+        if (remainder != null && !remainder.isEmpty()) {
+            NsDialogue.handle(state, remainder, listener, false);
         }
-        long millis = Long.parseLong(ms);
-        if (millis <= 0) {
-            return;
-        }
-        int frames = Math.round(millis * 60f / 1000f);
-        state.runState = VnEngine.State.WAITING_DELAY;
-        listener.onDelay(frames);
     }
 
     /** True if every letter in {@code text} is uppercase (and it has at least one letter) -- the
@@ -327,12 +411,27 @@ public final class NsCommandDispatcher {
         // never running and the same garbage line being redisplayed on every
         // tap forever. Each loop iteration here peels off one more "CONNECTOR operand OP operand"
         // segment; whatever's left once the text no longer starts that way is the real consequent.
+        // A CONNECTOR is a whole RUN of the same joiner character, not just one -- real
+        // ONScripter-EN's own ifCommand explicitly consumes "while (*op_buf == '&') op_buf++;" (and
+        // the same for '|'), so a script written with C-style "&&"/"||" (extremely common even
+        // though native NScripter syntax is a single '&'/'|' -- a real Tsukihime script uses
+        // "if %sceneskip==1 && %viewed==1 ...") is just as valid as the single-character form.
+        // Before this matched that run-length tolerance, only ONE '&'/'|' was ever stripped per
+        // loop iteration: for "&&", that left a leading '&' still attached to what should have been
+        // the next comparison, which CONDITION could never match -- silently breaking the chain
+        // exactly like the undocumented-'&'-at-all bug this same method's other comment describes,
+        // just one bug more specific (real scripts using "&"-chains alone were already fixed; the
+        // "&&"-specific ones weren't).
         while (true) {
             char c0 = rest.isEmpty() ? ' ' : rest.charAt(0);
             if (c0 != '&' && c0 != '|') {
                 break;
             }
-            Matcher next = CONDITION.matcher(rest.substring(1).trim());
+            int connectorEnd = 0;
+            while (connectorEnd < rest.length() && rest.charAt(connectorEnd) == c0) {
+                connectorEnd++;
+            }
+            Matcher next = CONDITION.matcher(rest.substring(connectorEnd).trim());
             if (!next.matches()) {
                 break; // doesn't actually extend the chain -- treat the rest as the consequent,
                        // same tolerance as any other unparseable trailing text in this dispatcher
@@ -402,6 +501,38 @@ public final class NsCommandDispatcher {
         return NsAssetResolver.resolve(base, stripFileTag(filename));
     }
 
+    /** When 2+ options in the same menu share byte-identical fallback text, appends a positional
+     * "(N)" suffix to every option sharing that text, in place. A real, common pattern this
+     * matters for: several "spbtn" buttons all "lsp"-loading the exact same shared placeholder/
+     * highlight-only image at different screen positions (see spbtnHandler's own doc on the
+     * fileNameHint fallback), with the actual "Start"/"Load"/"Extra"-style art baked into a
+     * SEPARATE sprite this host has no way to associate back to any one button -- e.g. a real
+     * "May Sky" title menu, three options that would otherwise all read literally
+     * "Button_for_Title_Text" with nothing to tell them apart. Indistinguishable repeated text is
+     * strictly worse than a numbered placeholder the player can at least refer to ("the 2nd one").
+     * Called from every choice-menu-building path in this dispatcher ("select"/"selgosub"/
+     * "btnwait"-family, the latter covering "cselbtn" too via its own useCsel branch), not just
+     * "btnwait" -- a "select"/"selgosub" menu with genuinely distinct script-authored text (the
+     * overwhelming common case) never has two entries compare equal, so this is a no-op there; but
+     * a script CAN author (or variable-substitute into) two identical option strings, which
+     * deserves the exact same "(N)" disambiguation as an auto-derived placeholder collision, not a
+     * silent pass-through just because the source happened to be different. Leaves genuinely
+     * distinct labels untouched either way. */
+    private static void disambiguateDuplicateLabels(List<String> labels) {
+        Map<String, Integer> totalCounts = new HashMap<>();
+        for (String label : labels) {
+            totalCounts.merge(label, 1, Integer::sum);
+        }
+        Map<String, Integer> seenSoFar = new HashMap<>();
+        for (int i = 0; i < labels.size(); i++) {
+            String label = labels.get(i);
+            if (totalCounts.get(label) > 1) {
+                int occurrence = seenSoFar.merge(label, 1, Integer::sum);
+                labels.set(i, label + " (" + occurrence + ")");
+            }
+        }
+    }
+
     /** Resolves a bareword argument through "stralias"'s literal-constant table (see its handler's
      * doc and {@link NsExecState#barewordConstants}) before treating it as a file path -- e.g.
      * "stralias bgcoffee,\"data\\bg_coffee.png\"" then later "bg bgcoffee,10". A "$var"-style
@@ -441,20 +572,35 @@ public final class NsCommandDispatcher {
         return filename;
     }
 
-    /** Extracts the literal display text from an "lsp"-style ":s/…;…" text-sprite spec (e.g.
+    /** Extracts the literal display text from an "lsp"-style ":s…;…" text-sprite spec (e.g.
      * ":s/36,38,0;#FFFFFF#a9a9a9`Start game" -> "Start game")
      * -- the font-size/pitch and one-or-two "#RRGGBB" color fields are discarded entirely, since
      * this host maps such button sprites onto its native choice UI rather than actually rendering
-     * styled text as a sprite. Returns null if {@code value} isn't ":s"-tagged. */
+     * styled text as a sprite. The "/size,size,pitch;" block is itself OPTIONAL -- real
+     * ONScripter-EN's own parseTaggedString (see ONScripterLabel_animation.cpp's "buffer[0]=='s'"
+     * branch) only reads it when a '/' immediately follows "s", falling back to the sentence font's
+     * own default size otherwise and jumping straight into the "#RRGGBB" color run with NO
+     * separating ';' at all -- e.g. a real ":s#FFFFFF`Come here..." (seen verbatim in
+     * night_of_the_forget_me_nots's own script) has no semicolon anywhere in it. Requiring one
+     * unconditionally (an earlier version of this method did) misdetected every such untagged-size
+     * text sprite as a real image file instead -- attempting to resolve/load the ENTIRE raw spec
+     * string (tag, color codes, and all) as if it were a literal filename, producing a nonsensical,
+     * always-missing asset path instead of ever showing the real button label text. Returns null if
+     * {@code value} isn't ":s"-tagged at all. */
     private static String textSpriteLabel(String value) {
         if (value.length() < 2 || value.charAt(0) != ':' || Character.toLowerCase(value.charAt(1)) != 's') {
             return null;
         }
-        int semi = value.indexOf(';');
-        if (semi < 0) {
-            return null;
+        String rest;
+        if (value.length() > 2 && value.charAt(2) == '/') {
+            int semi = value.indexOf(';');
+            if (semi < 0) {
+                return null;
+            }
+            rest = value.substring(semi + 1);
+        } else {
+            rest = value.substring(2);
         }
-        String rest = value.substring(semi + 1);
         while (rest.length() >= 7 && rest.charAt(0) == '#') {
             rest = rest.substring(7);
         }
@@ -472,6 +618,43 @@ public final class NsCommandDispatcher {
         String name = slash >= 0 ? path.substring(slash + 1) : path;
         int dot = name.lastIndexOf('.');
         return dot > 0 ? name.substring(0, dot) : name;
+    }
+
+    /** Shared body for "lsp"/"lsph" (real ONScripter-EN dispatches both from the same lspCommand --
+     * see the "lsp" handler's own doc for the full real-pattern rationale). {@code fireImmediately}
+     * is the only behavioral difference: true for "lsp" (shows the sprite right away, same as
+     * always), false for "lsph" (loads and tracks the image/label so a following "spbtn" can find
+     * it, but leaves the actual reveal to a later "vsp <layer>,1"). */
+    private static void handleLsp(NsExecState state, List<NsArg> args, VnEngine.Listener listener,
+                                    File vnDir, boolean fireImmediately) {
+        if (args.size() < 2) {
+            return;
+        }
+        int layer = (int) NsExpr.numeric(args.get(0), state);
+        String spec = resolveFileArg(args.get(1), state);
+        String label = textSpriteLabel(spec);
+        if (label != null) {
+            state.spriteTextLabels.put(layer, label);
+            state.spriteImageFiles.remove(layer);
+            return;
+        }
+        // Anything else is a real image sprite at an explicit numbered layer -- e.g. scripts
+        // sometimes load a background this way ("lsp 50,\":c;dat\\bg\\bg04_1.jpg\",
+        // -240,0") rather than via "bg". Same transparency-tag handling as "ld", but with a
+        // literal x/y instead of an "l"/"c"/"r" auto-position (this command has no such
+        // left/center/right convention of its own).
+        state.spriteFileHints.put(layer, fileNameHint(spec));
+        state.spriteImageFiles.put(layer, resolveAsset(state, vnDir, spec));
+        state.spriteRawSpecs.put(layer, spec);
+        if (args.size() < 4) {
+            return;
+        }
+        int x = (int) NsExpr.numeric(args.get(2), state);
+        int y = (int) NsExpr.numeric(args.get(3), state);
+        state.spritePositions.put(layer, new int[]{x, y});
+        if (fireImmediately) {
+            listener.onSprite(layer, x, y, resolveAsset(state, vnDir, spec), transparencyFor(spec), alphaMaskCellsFor(spec));
+        }
     }
 
     /** How to decode an "ld"-referenced file's transparency, from its optional ":x;" tag:
@@ -600,26 +783,31 @@ public final class NsCommandDispatcher {
         }
     }
 
-    /** True if {@code text}'s last non-whitespace character is a ',' outside any quoted string --
-     * the signal that a variadic command's (namely "select"'s) argument list continues onto the
-     * next physical line rather than ending here. */
+    /** True if {@code text}'s last non-whitespace character is a ',' outside any quoted string or
+     * `backtick string` (NScripter's two equivalent string delimiters) -- the signal that a
+     * variadic command's (namely "select"'s) argument list continues onto the next physical line
+     * rather than ending here. */
     private static boolean endsWithTopLevelComma(String text) {
         String t = text.stripTrailing();
         if (t.isEmpty()) {
             return false;
         }
         boolean inQuotes = false;
+        boolean inBacktick = false;
         for (int i = 0; i < t.length(); i++) {
-            if (t.charAt(i) == '"') {
+            char c = t.charAt(i);
+            if (c == '"' && !inBacktick) {
                 inQuotes = !inQuotes;
+            } else if (c == '`' && !inQuotes) {
+                inBacktick = !inBacktick;
             }
         }
-        return !inQuotes && t.charAt(t.length() - 1) == ',';
+        return !inQuotes && !inBacktick && t.charAt(t.length() - 1) == ',';
     }
 
     /** Parses a "select"-family option list -- "\"text1\",label1,\"text2\",label2,..." -- shared by
-     * "select" and "csel" (see their handlers; both dispatch from the same parser in real
-     * ONScripter-EN). Real scripts routinely spread this list across several physical lines, each
+     * "select", "selgosub", and "csel" (see their handlers; all three dispatch from the same parser
+     * in real ONScripter-EN). Real scripts routinely spread this list across several physical lines, each
      * one but the last ending in a trailing comma (e.g. a bare "select" line followed by
      * "\"`Begin\",*s_1,\n\"`Continue\",*load,\n
      * \"`Quit\",*quit") -- the line-per-command dispatch loop only ever hands a handler the command
@@ -632,8 +820,22 @@ public final class NsCommandDispatcher {
         String lastRaw = state.pc > 0 ? state.lines.get(state.pc - 1) : "";
         while ((allArgs.isEmpty() || endsWithTopLevelComma(lastRaw)) && state.pc < state.lines.size()) {
             NsLine next = NsTokenizer.classify(state.lines.get(state.pc));
+            if (next.type == NsLine.Type.BLANK) {
+                // A real, observed pattern (Instant Death! Panda Samurai's own "select"s): a blank
+                // line sits between the bare "select" line and its own option-list continuation
+                // (or between two continuation lines). Blank lines carry no meaning of their own in
+                // NScripter and must be skipped over rather than treated as ending the block --
+                // before this was handled, the very first blank line right after a bare "select"
+                // made this loop stop immediately (before ever consuming any real option), so the
+                // whole "\"text\",*label" continuation line was left for the normal dispatch loop to
+                // read as its own separate statement -- which isn't a recognized command, so it fell
+                // through to plain dialogue and showed the raw, unparsed select syntax verbatim on
+                // screen instead of ever presenting a real choice menu.
+                state.pc++;
+                continue;
+            }
             if (next.type != NsLine.Type.STATEMENT) {
-                break; // a label/blank/comment ends the block: stop rather than misconsume it
+                break; // a label/comment ends the block: stop rather than misconsume it
             }
             lastRaw = state.lines.get(state.pc);
             allArgs.addAll(NsTokenizer.parseArgs(next.text));
@@ -683,13 +885,49 @@ public final class NsCommandDispatcher {
             Integer dest = state.labelIndex.get(target);
             if (dest != null) {
                 state.callStack.push(state.pc);
+                state.callStackChainRemainder.push("");
                 state.pc = dest;
             }
         });
         h.put("return", (state, args, listener, vnDir) -> {
             if (!state.callStack.isEmpty()) {
                 state.pc = state.callStack.pop();
+                String remainder = state.callStackChainRemainder.pop();
+                if (!remainder.isEmpty()) {
+                    // The gosub this "return" answers was itself embedded mid-chain (e.g.
+                    // "gosub *windowoff:textoff:...:wait 500:end") -- resume the rest of that
+                    // ORIGINAL line now, rather than falling through to the next physical line
+                    // (which is what a bare state.pc assignment alone would do). See
+                    // NsExecState.callStackChainRemainder's own doc.
+                    executeChain(remainder, state, listener, vnDir);
+                }
             }
+        });
+        // "skip N" -- a relative LINE jump counted from THIS "skip" command's own line (real
+        // ONScripter-EN: "current_label_info.start_line + current_line + N", where "current_line"
+        // is the line presently executing -- see ScriptParser_command.cpp's skipCommand). By the
+        // time this handler runs, state.pc has already been advanced exactly one line past that
+        // (see NsScriptEngine.runLoop's "state.pc++" before dispatch -- true whether "skip" is
+        // reached as its own top-level statement or, more commonly, as an "if" line's consequent
+        // via executeChain, which re-executes text from that same already-incremented pc without
+        // touching it again) -- so the real target is "(state.pc - 1) + N", not state.pc + N.
+        // Two common real idioms this backs: a "btnwait"-loop retrying itself
+        // ("if %buttonno==0 skip -2"), and -- the one that matters most for real playability -- a
+        // per-scene "if %sceneskip==1 && %alreadyviewed==1 skip N" guard that jumps straight into
+        // a "selgosub"-based "already viewed -- skip?" prompt (see that handler's own doc) instead
+        // of silently replaying the scene, while a bare "skip N" right after a *first*-time replay
+        // jumps forward PAST that same prompt block so it doesn't immediately re-ask right after
+        // the scene it's asking about just finished playing. Before this was implemented, "skip"
+        // was an unrecognized lowercase mnemonic that runOneStatement silently no-op'd, so both the
+        // guard and the following "skip" always fell through -- the "already viewed" prompt
+        // appeared unconditionally, on every single visit (first time or not, auto-skip preference
+        // or not), rather than only when it was actually meant to.
+        h.put("skip", (state, args, listener, vnDir) -> {
+            if (args.isEmpty()) {
+                return;
+            }
+            long target = (state.pc - 1) + NsExpr.numeric(args.get(0), state);
+            state.pc = (int) Math.max(0, Math.min(state.lines.size(), target));
         });
         h.put("jumpf", (state, args, listener, vnDir) -> {
             int i = state.pc;
@@ -998,10 +1236,44 @@ public final class NsCommandDispatcher {
             if (optionTexts.isEmpty()) {
                 return;
             }
+            disambiguateDuplicateLabels(optionTexts);
             state.pendingChoiceLabels = labels;
+            state.pendingChoiceIsGosub = false;
             state.runState = VnEngine.State.WAITING_CHOICE;
             state.lastChoiceOptionTexts = new ArrayList<>(optionTexts);
             state.lastChoiceLabels = new ArrayList<>(labels);
+            state.lastChoiceIsGosub = false;
+            state.lastChoiceBtnwaitVarIndex = null;
+            state.lastChoiceButtonIds = null;
+            listener.onChoices(optionTexts);
+        });
+        // "selgosub" -- parses the exact same "\"text\",label,..." option-list syntax as "select"
+        // (see collectSelectPairs), but the chosen option's label is reached via "gosub", not a
+        // plain jump: real ONScripter-EN's SELECT_GOSUB_MODE (see ONScripterLabel_command.cpp's
+        // selectCommand) pushes a return address before jumping, so the target branch can "return"
+        // back into the menu's own flow. A real, very common use is a per-scene "already viewed --
+        // skip?" idiom repeated dozens of times throughout a long script: "selgosub `1.
+        // Skip`,*skip20,`2. Don't skip`,*s20" followed by "*skip20 / return" right where the
+        // selgosub itself sits -- picking "Don't skip" falls into "*s20", plays the scene, and its
+        // own trailing "return" needs to land back here, not nowhere. Before this was implemented,
+        // "selgosub" was an unrecognized lowercase mnemonic that runOneStatement silently skipped
+        // entirely -- the option-list's own continuation line (starting with a backtick, not a
+        // command mnemonic) then read as literal dialogue instead, so the player saw raw script
+        // syntax like "2. Don't skip`, *s20" printed on screen and never got a real choice at all.
+        h.put("selgosub", (state, args, listener, vnDir) -> {
+            List<String> optionTexts = new ArrayList<>();
+            List<String> labels = new ArrayList<>();
+            collectSelectPairs(args, state, optionTexts, labels);
+            if (optionTexts.isEmpty()) {
+                return;
+            }
+            disambiguateDuplicateLabels(optionTexts);
+            state.pendingChoiceLabels = labels;
+            state.pendingChoiceIsGosub = true;
+            state.runState = VnEngine.State.WAITING_CHOICE;
+            state.lastChoiceOptionTexts = new ArrayList<>(optionTexts);
+            state.lastChoiceLabels = new ArrayList<>(labels);
+            state.lastChoiceIsGosub = true;
             state.lastChoiceBtnwaitVarIndex = null;
             state.lastChoiceButtonIds = null;
             listener.onChoices(optionTexts);
@@ -1022,6 +1294,13 @@ public final class NsCommandDispatcher {
         h.put("csel", (state, args, listener, vnDir) -> {
             state.customSelectTexts = new ArrayList<>();
             state.customSelectLabels = new ArrayList<>();
+            // A fresh declaration invalidates whatever "cselbtn" calls a PREVIOUS "*customsel" loop
+            // iteration already made (see NsExecState.pendingButtons's doc) -- otherwise a menu
+            // that re-declares "csel" each loop (a common pattern: re-lay-out the same options
+            // every iteration) would leak the previous iteration's buttons into the next. Only CSEL
+            // entries: a persistent SPBTN-sourced toolbar registered independently of any "csel"
+            // must survive it.
+            state.pendingButtons.removeIf(b -> b.source == NsExecState.ButtonEntry.Source.CSEL);
             collectSelectPairs(args, state, state.customSelectTexts, state.customSelectLabels);
             Integer dest = state.labelIndex.get("customsel");
             if (dest != null) {
@@ -1084,6 +1363,44 @@ public final class NsCommandDispatcher {
         h.put("mp3stop", stopMusicHandler);
         h.put("bgmstop", stopMusicHandler);
         h.put("mp3fadeout", stopMusicHandler); // no fade support needed under the e-ink no-animation rule
+        // "play"/"playonce" -- real ONScripter-EN's CD-DA track command: "play \"*8\"" plays CD
+        // track 8, "playonce" the same but without looping (see ONScripterLabel_command.cpp's
+        // playCommand/playCDAudio) -- differ only in a looping flag this host's single onMusic(File)
+        // callback has no equivalent for, same tolerance "bgm" vs "bgmonce" already gets. Without a
+        // real CD drive, real ONScripter itself falls back to a "cd\trackNN.mp3"/".ogg"/".wav" file
+        // (checked in that order) in the game's own folder -- exactly the convention a pack that
+        // ships ripped CD audio (e.g. a "CD"/"cd" folder of "trackNN.ogg" files) relies on. A bare
+        // "play \"somefile\"" (no leading '*') plays that file directly instead (real ONScripter's
+        // sequenced-MIDI-music fallback). Before this was implemented, "play" was an unrecognized
+        // lowercase mnemonic that silently no-op'd, so a script relying on it for its soundtrack
+        // never played any music at all.
+        NsCommandHandler cdPlayHandler = (state, args, listener, vnDir) -> {
+            if (args.isEmpty()) {
+                return;
+            }
+            String value = resolveFileArg(args.get(0), state);
+            if (value.startsWith("*")) {
+                int track;
+                try {
+                    track = Integer.parseInt(value.substring(1).trim());
+                } catch (NumberFormatException e) {
+                    return;
+                }
+                String trackName = String.format(Locale.ROOT, "cd\\track%02d", track);
+                for (String ext : new String[]{".mp3", ".ogg", ".wav"}) {
+                    File f = resolveAsset(state, vnDir, trackName + ext);
+                    if (f.exists()) {
+                        listener.onMusic(f);
+                        return;
+                    }
+                }
+            } else {
+                listener.onMusic(resolveAsset(state, vnDir, value));
+            }
+        };
+        h.put("play", cdPlayHandler);
+        h.put("playonce", cdPlayHandler);
+        h.put("playstop", stopMusicHandler);
         NsCommandHandler noOp = (state, args, listener, vnDir) -> {
         };
         h.put("vol", noOp);
@@ -1093,35 +1410,46 @@ public final class NsCommandDispatcher {
         NsCommandHandler clearTextHandler = (state, args, listener, vnDir) -> listener.onTextClear();
         h.put("textclear", clearTextHandler);
         h.put("erasetextwindow", clearTextHandler);
-        // "lsp <layer>,<spec>,<x>,<y>" -- real rendering of an ":s/…;…" text-sprite (custom
-        // font/size/color, a pattern commonly seen on title-screen buttons, e.g.
-        // "lsp 1,\":s/36,38,0;#FFFFFF#a9a9a9`Start game\",565,430") isn't implemented; only the
-        // label text is tracked, so a following "spbtn"/"btnwait" button group (see those handlers)
-        // can be offered as a native choice menu. Any other "lsp" form (a plain image, ":c;"/":a;"
-        // tagged, etc.) is left a no-op, same as before.
-        h.put("lsp", (state, args, listener, vnDir) -> {
+        // "lsp <layer>,<spec>,<x>,<y>" / "lsph <layer>,<spec>,<x>,<y>" -- real rendering of an
+        // ":s/…;…" text-sprite (custom font/size/color, a pattern commonly seen on title-screen
+        // buttons, e.g. "lsp 1,\":s/36,38,0;#FFFFFF#a9a9a9`Start game\",565,430") isn't implemented;
+        // only the label text is tracked, so a following "spbtn"/"btnwait" button group (see those
+        // handlers) can be offered as a native choice menu. Any other "lsp" form (a plain image,
+        // ":c;"/":a;" tagged, etc.) loads for real. In real ONScripter-EN, "lsp" and "lsph" dispatch
+        // from the exact same lspCommand, differing only in initial visibility ("lsph" loads the
+        // image into the sprite slot immediately -- so a later "spbtn" on that layer can register a
+        // button for it -- but starts it hidden, relying on a later "vsp <layer>,1" to actually show
+        // it; see that handler's own doc). Before "lsph" was recognized as an alias at all, it was
+        // an unrecognized lowercase mnemonic that silently no-op'd, so that layer's image/label
+        // never got tracked -- a "spbtn" on it then correctly found nothing loaded (see that
+        // handler's own zero-cells guard) and silently refused to register the button, stranding a
+        // real "close menu" icon (a common real pattern: load-but-hide via "lsph", reveal via "vsp"
+        // once some prerequisite state is set) as permanently unreachable.
+        h.put("lsp", (state, args, listener, vnDir) -> handleLsp(state, args, listener, vnDir, true));
+        h.put("lsph", (state, args, listener, vnDir) -> handleLsp(state, args, listener, vnDir, false));
+        // "vsp <layer>,<0|1>" -- toggles a real image sprite's visibility without reloading it;
+        // real ONScripter-EN's vspCommand just flips a boolean on the same sprite_info slot
+        // "lsp"/"lsph"/"ld" already populated. Its main real-world use is revealing a "lsph"-loaded
+        // sprite once some prerequisite state is set (see that handler's own doc) -- e.g. a "close
+        // menu" icon shown only after the menu has actually opened. A text-sprite layer (from
+        // "lsp"'s ":s/…;…" form) has no real image of its own to show/hide, so this is a no-op for one.
+        h.put("vsp", (state, args, listener, vnDir) -> {
             if (args.size() < 2) {
                 return;
             }
             int layer = (int) NsExpr.numeric(args.get(0), state);
-            String spec = resolveFileArg(args.get(1), state);
-            String label = textSpriteLabel(spec);
-            if (label != null) {
-                state.spriteTextLabels.put(layer, label);
+            boolean visible = NsExpr.numeric(args.get(1), state) == 1;
+            if (!visible) {
+                listener.onSpriteCleared(layer);
                 return;
             }
-            // Anything else is a real image sprite at an explicit numbered layer -- e.g. scripts
-            // sometimes load a background this way ("lsp 50,\":c;dat\\bg\\bg04_1.jpg\",
-            // -240,0") rather than via "bg". Same transparency-tag handling as "ld", but with a
-            // literal x/y instead of an "l"/"c"/"r" auto-position (this command has no such
-            // left/center/right convention of its own).
-            state.spriteFileHints.put(layer, fileNameHint(spec));
-            if (args.size() < 4) {
-                return;
+            String spec = state.spriteRawSpecs.get(layer);
+            int[] xy = state.spritePositions.get(layer);
+            File image = state.spriteImageFiles.get(layer);
+            if (spec == null || xy == null || image == null) {
+                return; // nothing real-image-shaped loaded at this layer (e.g. a text sprite): no-op
             }
-            int x = (int) NsExpr.numeric(args.get(2), state);
-            int y = (int) NsExpr.numeric(args.get(3), state);
-            listener.onSprite(layer, x, y, resolveAsset(state, vnDir, spec), transparencyFor(spec), alphaMaskCellsFor(spec));
+            listener.onSprite(layer, xy[0], xy[1], image, transparencyFor(spec), alphaMaskCellsFor(spec));
         });
         // "spbtn <layer>,<button id>" / "exbtn <sprite>,<button id>,<hitmask spec>" /
         // "cellcheckexbtn" -- registers a sprite as a clickable button id. In real ONScripter-EN,
@@ -1141,18 +1469,45 @@ public final class NsCommandDispatcher {
             }
             int layer = (int) NsExpr.numeric(args.get(0), state);
             int buttonId = (int) NsExpr.numeric(args.get(1), state);
-            // A text-labeled ("lsp"-":s/…;…") layer gets its real label; an image-sprite button
-            // (a common pattern for save/load/options
-            // menus -- this host can't render/hit-test the real button graphics) falls back to that
-            // same "lsp" call's own filename (see fileNameHint's doc), or a bare button id as a
-            // last resort -- still offered as a native choice either way, so the menu stays
-            // navigable rather than silently stranding the player in front of it.
+            // A text-labeled ("lsp"-":s/…;…") layer gets its real label; a plain image-sprite
+            // button (a common pattern for save/load/options menus -- this host can't hit-test the
+            // real button graphics' precise click shape, so it's still offered as a native choice
+            // rather than real free-form tap positions) shows that same "lsp" call's own image (see
+            // NsExecState.spriteImageFiles's doc) alongside a filename-derived label (see
+            // fileNameHint's doc). Either way requires SOME prior "lsp" (or "ld") at this exact
+            // layer -- lsp's own handler always populates spriteTextLabels or (spriteFileHints +
+            // spriteImageFiles) together, never partially -- so label/image end up either both null
+            // or both set here.
             String label = state.spriteTextLabels.get(layer);
+            File image = null;
             if (label == null) {
                 label = state.spriteFileHints.get(layer);
+                image = state.spriteImageFiles.get(layer);
             }
-            state.pendingButtonLabels.add(label != null ? label : ("Button " + buttonId));
-            state.pendingButtonIds.add(buttonId);
+            if (label == null) {
+                // Real ONScripter-EN's own spbtnCommand explicitly refuses to register a button
+                // for a sprite layer with zero cells -- i.e. one whose "lsp"/"ld" was never actually
+                // called (see ONScripterLabel_command.cpp: "if (sprite_info[sprite_no]
+                // .num_of_cells == 0) return;") -- there's nothing visible there for a real player
+                // to click, so the button silently doesn't exist. A common real pattern this
+                // matters for: an "omake"/bonus-content button conditionally lsp'd only once
+                // unlocked ("if %101 > 0 lsp 47,...") but spbtn'd on that same layer
+                // UNCONDITIONALLY right after -- before this guard, a fresh (not-yet-unlocked)
+                // playthrough surfaced a phantom "Button 47" placeholder choice with nothing behind
+                // it, letting the player "select" content that was never actually shown.
+                return;
+            }
+            // Same real transparency tag ("lsp"'s own spec string for this layer -- see
+            // NsExecState.spriteRawSpecs's doc) the layer's sprite would render with directly, so a
+            // host rendering this button's own image (see VnEngine.Listener#onChoices' 4-arg
+            // overload) doesn't show a raw, untreated rectangle where a real alpha-mask cutout or
+            // color-keyed transparent background belongs.
+            String rawSpec = state.spriteRawSpecs.get(layer);
+            state.pendingButtons.add(new NsExecState.ButtonEntry(label, buttonId, image,
+                    rawSpec != null ? transparencyFor(rawSpec) : VnEngine.SpriteTransparency.OPAQUE,
+                    rawSpec != null ? alphaMaskCellsFor(rawSpec) : 1,
+                    null, // whole sprite, never cropped
+                    NsExecState.ButtonEntry.Source.SPBTN));
         };
         h.put("spbtn", spbtnHandler);
         h.put("exbtn", spbtnHandler);
@@ -1162,24 +1517,57 @@ public final class NsCommandDispatcher {
         // per-frame hit-testing/cursor concept to feed that into -- it just offers whatever "exbtn"
         // itself registered as a native choice regardless -- so it's a safe no-op.
         h.put("exbtn_d", noOp);
+        // "btndef \"file\"" (or "btndef clear"/"btndef \"\"" to clear it) -- the single shared
+        // image every subsequent plain "btn" (see its own handler, just below) crops its own
+        // visible appearance out of. Real ONScripter-EN's own btndefCommand loads this exact way
+        // (see ONScripterLabel_command.cpp): a bareword "clear", or an empty string, clears any
+        // previously loaded image rather than resolving "clear"/"" as if they were real filenames.
+        h.put("btndef", (state, args, listener, vnDir) -> {
+            if (args.isEmpty()) {
+                state.btndefImage = null;
+                return;
+            }
+            String raw = resolveFileArg(args.get(0), state);
+            if (raw.isEmpty() || raw.equalsIgnoreCase("clear")) {
+                state.btndefImage = null;
+                return;
+            }
+            state.btndefImage = resolveAsset(state, vnDir, raw);
+        });
         // "btn no,x,y,w,h,srcX,srcY" -- the original, simplest button-registration idiom: a
         // rectangular click region cropped out
         // of the single "btndef"-loaded image, distinct from "spbtn"/"exbtn" (which tag a NUMBERED
         // sprite layer instead -- "btn" has no such layer, every button crops from the same shared
         // image, so there's no lsp-style label to fall back to; see spbtn's own doc). Feeds the same
         // button-click list, so "btnwait"/"btnwait2"/"selectbtnwait" pick it up with no extra
-        // plumbing. x/y/w/h/srcX/srcY are all ignored, same tolerance "spbtn"'s own coordinates get
-        // (this host can't hit-test/render the real image crop anyway). A typical
-        // main menu ("Start"/"Continue"/"Load") registers its buttons exactly this way -- before
-        // this was implemented, that menu had nothing to offer at all, so its own "btnwait2"-based
-        // click loop blocked forever with no way to progress.
+        // plumbing. Real ONScripter-EN's own btnCommand (see ONScripterLabel_command.cpp) copies a
+        // real (w,h) rectangle starting at (srcX,srcY) out of the btndef image as this button's OWN
+        // rendered appearance (TRANS_COPY -- a plain opaque crop, no masking) -- that source
+        // rectangle, not any text, IS the button's real visual in a genuine ONScripter build. Before
+        // this was implemented (and before "btndef" was implemented at all), a "btn"-only menu (a
+        // real, common pattern: Kagetsu Tohya's ENTIRE title/system-menu chrome, for one) had
+        // nothing but a generic "Button N" placeholder to show for every option -- no real label,
+        // no real image, on a game that never uses "spbtn"/"exbtn" at all. A {@link
+        // NsExecState.ButtonEntry#cropRect} is only populated when a "btndef" image is actually
+        // loaded; with none loaded, this still falls back to the same "Button N"-labeled, imageless
+        // entry as before.
         h.put("btn", (state, args, listener, vnDir) -> {
             if (args.isEmpty()) {
                 return;
             }
             int buttonId = (int) NsExpr.numeric(args.get(0), state);
-            state.pendingButtonLabels.add("Button " + buttonId);
-            state.pendingButtonIds.add(buttonId);
+            File image = null;
+            int[] cropRect = null;
+            if (state.btndefImage != null && args.size() >= 7) {
+                int cropW = (int) NsExpr.numeric(args.get(3), state);
+                int cropH = (int) NsExpr.numeric(args.get(4), state);
+                int srcX = (int) NsExpr.numeric(args.get(5), state);
+                int srcY = (int) NsExpr.numeric(args.get(6), state);
+                image = state.btndefImage;
+                cropRect = new int[]{srcX, srcY, cropW, cropH};
+            }
+            state.pendingButtons.add(new NsExecState.ButtonEntry("Button " + buttonId, buttonId, image,
+                    VnEngine.SpriteTransparency.OPAQUE, 1, cropRect, NsExecState.ButtonEntry.Source.SPBTN));
         });
         // "btnwait <var>" -- real semantics: blocks until the player clicks one of the
         // "spbtn"-registered sprite buttons, stores its button id into <var>, then falls through to
@@ -1192,7 +1580,23 @@ public final class NsCommandDispatcher {
             if (args.isEmpty()) {
                 return;
             }
-            if (state.pendingButtonLabels.isEmpty()) {
+            // A real "csel"-declared choice, if one's pending, IS the menu -- see
+            // NsExecState.pendingButtons's doc on why it wins over whatever incidental
+            // "spbtn"/"exbtn" system-toolbar buttons (quick-save/menu/auto/etc., re-registered
+            // before nearly every blocking wait in a typical script) happen to be registered at the
+            // same moment. Either way, the OTHER source is discarded here too: real ONScripter lets
+            // a click land on any registered button regardless of which command declared it, but
+            // this host's choice-menu UI can only ever present one coherent list at a time, and a
+            // stale leftover from a discarded source bleeding into the NEXT unrelated btnwait would
+            // be worse than simply dropping it -- the toolbar's own functionality (save/load/
+            // settings/text log) already has a native equivalent in this host's own UI chrome.
+            List<NsExecState.ButtonEntry> cselEntries = new ArrayList<>();
+            List<NsExecState.ButtonEntry> spbtnEntries = new ArrayList<>();
+            for (NsExecState.ButtonEntry entry : state.pendingButtons) {
+                (entry.source == NsExecState.ButtonEntry.Source.CSEL ? cselEntries : spbtnEntries).add(entry);
+            }
+            List<NsExecState.ButtonEntry> source = !cselEntries.isEmpty() ? cselEntries : spbtnEntries;
+            if (source.isEmpty()) {
                 // Real ONScripter's "btnwait"/"selectbtnwait" ALWAYS blocks waiting for a click,
                 // even with zero registered buttons -- its own event loop only ever returns once a
                 // valid click/key event
@@ -1214,16 +1618,33 @@ public final class NsCommandDispatcher {
                 return;
             }
             state.pendingBtnwaitVarIndex = NsExpr.numVarIndex(args.get(0), state);
-            state.pendingChoiceButtonIds = new ArrayList<>(state.pendingButtonIds);
-            List<String> optionTexts = new ArrayList<>(state.pendingButtonLabels);
-            state.pendingButtonLabels.clear();
-            state.pendingButtonIds.clear();
+            List<Integer> ids = new ArrayList<>();
+            List<String> optionTexts = new ArrayList<>();
+            List<File> optionImages = new ArrayList<>();
+            List<VnEngine.SpriteTransparency> optionTransparencies = new ArrayList<>();
+            List<Integer> optionAlphaMaskCells = new ArrayList<>();
+            List<int[]> optionCropRects = new ArrayList<>();
+            for (NsExecState.ButtonEntry entry : source) {
+                ids.add(entry.id);
+                optionTexts.add(entry.label);
+                optionImages.add(entry.image);
+                optionTransparencies.add(entry.transparency);
+                optionAlphaMaskCells.add(entry.alphaMaskCells);
+                optionCropRects.add(entry.cropRect);
+            }
+            disambiguateDuplicateLabels(optionTexts);
+            state.pendingChoiceButtonIds = ids;
+            state.pendingButtons.clear();
             state.runState = VnEngine.State.WAITING_CHOICE;
             state.lastChoiceOptionTexts = new ArrayList<>(optionTexts);
             state.lastChoiceLabels = null;
             state.lastChoiceBtnwaitVarIndex = state.pendingBtnwaitVarIndex;
             state.lastChoiceButtonIds = new ArrayList<>(state.pendingChoiceButtonIds);
-            listener.onChoices(optionTexts);
+            state.lastChoiceImages = new ArrayList<>(optionImages);
+            state.lastChoiceImageTransparencies = new ArrayList<>(optionTransparencies);
+            state.lastChoiceImageAlphaMaskCells = new ArrayList<>(optionAlphaMaskCells);
+            state.lastChoiceImageCropRects = new ArrayList<>(optionCropRects);
+            listener.onChoices(optionTexts, optionImages, optionTransparencies, optionAlphaMaskCells, optionCropRects);
         };
         h.put("btnwait", btnwaitHandler);
         // "selectbtnwait"/"btnwait2"/"textbtnwait" -- in real ONScripter-EN, the command table binds
@@ -1243,16 +1664,18 @@ public final class NsCommandDispatcher {
         h.put("btnwait2", btnwaitHandler);
         h.put("textbtnwait", btnwaitHandler);
         // "cselbtn index,buttonId,x,y" -- registers a clickable button for the "index"-th option
-        // declared by the most recent "csel" (see its handler and state.customSelectTexts's doc),
-        // feeding the same pendingButtonLabels/pendingButtonIds lists "spbtn" does so
-        // "selectbtnwait" (== "btnwait") picks it up with no extra plumbing. In real ONScripter-EN,
-        // this looks up the
-        // "index"-th real select-link's OWN text (NOT any "lsp"/sprite-based label -- an earlier
-        // version of this handler wrongly reused spriteTextLabels/spriteFileHints here, which is a
-        // different, unrelated idiom, see "spbtn"'s own doc), and no-ops if that index doesn't
-        // exist or has empty text -- same tolerance real ONScripter has (it just returns without
-        // registering a button). x/y ignored, same tolerance "spbtn" already has for real
-        // (non-hit-testable) coordinates.
+        // declared by the most recent "csel" (see its handler and state.customSelectTexts's doc).
+        // In real ONScripter-EN, this feeds the exact same button-click list plain "spbtn" does, so
+        // "selectbtnwait" (== "btnwait") picks it up with no extra plumbing -- but this host keeps
+        // "cselbtn" entries tagged with their own source (see NsExecState.pendingButtons's doc: a
+        // real "csel" is the script's own authored narrative decision, and gets shown on its own rather
+        // than buried among whatever incidental "spbtn"/"exbtn" system-toolbar buttons happen to be
+        // registered at the same moment). This looks up the "index"-th real select-link's OWN text
+        // (NOT any "lsp"/sprite-based label -- an earlier version of this handler wrongly reused
+        // spriteTextLabels/spriteFileHints here, which is a different, unrelated idiom, see
+        // "spbtn"'s own doc), and no-ops if that index doesn't exist or has empty text -- same
+        // tolerance real ONScripter has (it just returns without registering a button). x/y
+        // ignored, same tolerance "spbtn" already has for real (non-hit-testable) coordinates.
         h.put("cselbtn", (state, args, listener, vnDir) -> {
             if (args.size() < 2) {
                 return;
@@ -1266,9 +1689,61 @@ public final class NsCommandDispatcher {
             if (label == null || label.isEmpty()) {
                 return;
             }
-            state.pendingButtonLabels.add(label);
-            state.pendingButtonIds.add(buttonId);
+            state.pendingButtons.add(new NsExecState.ButtonEntry(label, buttonId, null,
+                    VnEngine.SpriteTransparency.OPAQUE, 1, null, NsExecState.ButtonEntry.Source.CSEL));
         });
+        // "getversion var" -- sets var to this interpreter's own version number, encoded as
+        // major*100+minor (e.g. 294 for "2.94") -- real ONScripter-EN reports its own NSC_VERSION
+        // constant (294 as of this writing; see version.h) here verbatim, and this reimplementation
+        // does the same, since real scripts only ever use this as a MINIMUM-version gate, never an
+        // exact-match or upper-bound check. An extremely common, near-universal real idiom this
+        // exists for: almost every professionally-packaged NScripter/ONScripter game's own
+        // "*start" opens with "getversion %v:if %v>=192 jumpf" (or similar), falling through to a
+        // "your interpreter is too old" error+"end" if the check fails. Before "getversion" was
+        // recognized at all, it silently no-op'd -- the target variable was simply never written,
+        // so it kept its default value of 0, and "0 >= 192" is always false: EVERY real game using
+        // this idiom (i.e. nearly all of them) hit its own "too old" error and quit on its very
+        // first line, before a single frame of actual content ever ran.
+        h.put("getversion", (state, args, listener, vnDir) -> {
+            if (args.isEmpty()) {
+                return;
+            }
+            int idx = NsExpr.numVarIndex(args.get(0), state);
+            state.numVars.put(idx, 294L);
+        });
+        // "rnd var,max" -- sets var to a random integer in [0, max-1]. "rnd2 var,low,high" is the
+        // same but with an explicit inclusive [low, high] range instead of an implicit [0, max-1]
+        // one -- real ONScripter-EN dispatches both from the same rndCommand (see
+        // ONScripterLabel_command.cpp), just reading a 2nd bound argument for "rnd2". A real,
+        // common use: picking one of several random flavor-text/encounter variants each time a
+        // point is reached (e.g. Kagetsu Tohya's own daily "horoscope" message: "rnd %msgno,218"
+        // picks 1 of 218 possible messages, with "if %msgno==%lastmsgno0 skip -1" retrying if it
+        // matches one of the last few shown). Before this was implemented, "rnd"/"rnd2" were
+        // unrecognized lowercase mnemonics that silently no-op'd -- the target variable was simply
+        // never written, so a real anti-repeat retry loop like that one compared the SAME
+        // never-changing default (0) against itself forever, an infinite loop that never actually
+        // produced a message.
+        NsCommandHandler rndHandler = (state, args, listener, vnDir) -> {
+            if (args.size() < 2) {
+                return;
+            }
+            int idx = NsExpr.numVarIndex(args.get(0), state);
+            int lower;
+            int upper;
+            if (args.size() >= 3) {
+                lower = (int) NsExpr.numeric(args.get(1), state);
+                upper = (int) NsExpr.numeric(args.get(2), state);
+            } else {
+                lower = 0;
+                upper = (int) NsExpr.numeric(args.get(1), state) - 1;
+            }
+            if (upper < lower) {
+                return; // malformed range: tolerate as a no-op, same as an unresolved target elsewhere
+            }
+            state.numVars.put(idx, (long) (lower + RANDOM.nextInt(upper - lower + 1)));
+        };
+        h.put("rnd", rndHandler);
+        h.put("rnd2", rndHandler);
         // "getcselnum var" -- sets var to the number of options the most recent "csel" declared.
         // In real ONScripter-EN, this just counts the
         // current select-link list and stores the count, nothing fancier -- commonly used to bound
@@ -1322,13 +1797,14 @@ public final class NsCommandDispatcher {
             state.numVars.clear();
             state.strVars.clear();
             state.callStack.clear();
+            state.callStackChainRemainder.clear();
             state.pendingChoiceLabels = new ArrayList<>();
             state.pendingBtnwaitVarIndex = null;
             state.pendingChoiceButtonIds = new ArrayList<>();
-            state.pendingButtonLabels.clear();
-            state.pendingButtonIds.clear();
+            state.pendingButtons.clear();
             state.spriteTextLabels.clear();
             state.spriteFileHints.clear();
+            state.btndefImage = null;
             state.customSelectTexts = new ArrayList<>();
             state.customSelectLabels = new ArrayList<>();
             state.pendingDialogueRemainder = null;
@@ -1338,6 +1814,10 @@ public final class NsCommandDispatcher {
             state.lastChoiceLabels = null;
             state.lastChoiceBtnwaitVarIndex = null;
             state.lastChoiceButtonIds = null;
+            state.lastChoiceImages = null;
+            state.lastChoiceImageTransparencies = null;
+            state.lastChoiceImageAlphaMaskCells = null;
+            state.lastChoiceImageCropRects = null;
             state.pc = state.startPc;
         });
         // "end" -- real NScripter terminates the whole engine; here it's invoked from a menu/title

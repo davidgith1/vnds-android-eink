@@ -86,13 +86,20 @@ public class NsArchiveReaderTest {
     }
 
     @Test
-    public void compressedEntryTypeThrowsRatherThanGuessing() throws IOException {
+    public void lzssCompressedEntryDecodesToAValidBmp() throws IOException {
+        // Type 2 (LZSS) used to be unsupported (this reader threw rather than guess at an
+        // undocumented scheme) -- now decoded for real via NsArchiveCompression, ported from real
+        // ONScripter-EN's own DirectReader::decodeLZSS. A real UI-chrome bitmap like this one
+        // (real ONScripter-EN's SPB/LZSS types are commonly used for exactly this kind of asset,
+        // never backgrounds/sprites/voice/music) was silently missing entirely before this.
         assumeTrue("Real sample archive not found relative to the test working directory", REAL_SAMPLE != null);
         NsArchiveReader reader = NsArchiveReader.open(REAL_SAMPLE);
         NsArchiveReader.Entry compressed = reader.find("dat\\ef\\effect01.bmp");
         assertNotNull(compressed);
         assertEquals(2, compressed.type);
-        assertThrows(UnsupportedOperationException.class, () -> reader.read(compressed));
+        byte[] data = reader.read(compressed);
+        assertEquals(compressed.originalSize, data.length);
+        assertArrayEquals(new byte[]{'B', 'M'}, java.util.Arrays.copyOf(data, 2)); // real BMP magic
     }
 
     @Test
@@ -172,5 +179,84 @@ public class NsArchiveReaderTest {
         out.write((int) ((v >> 16) & 0xFF));
         out.write((int) ((v >> 8) & 0xFF));
         out.write((int) (v & 0xFF));
+    }
+
+    @Test
+    public void openSarParsesARealSarHeaderShape() throws IOException {
+        // A real ".sar" entry has no compression-type byte and no separate original-size field
+        // (unlike ".nsa" -- see the class doc) -- hand-build a two-entry fixture matching that
+        // exact shape (reverse-engineered from a real 827-entry/99MB "arc.sar": count/base-offset
+        // header, then per-entry name/offset/size with entries packed back-to-back) and confirm
+        // openSar parses it, rather than misreading it as if it had .nsa's extra fields.
+        byte[] first = {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, 1, 2}; // JPEG-magic-prefixed content
+        byte[] second = {9, 8, 7};
+        File archive = buildSyntheticSar(new String[]{"image\\bg\\a.jpg", "image\\bg\\b.jpg"},
+                new byte[][]{first, second});
+
+        NsArchiveReader reader = NsArchiveReader.openSar(archive);
+        NsArchiveReader.Entry entryA = reader.find("image\\bg\\a.jpg");
+        assertNotNull(entryA);
+        assertEquals(0, entryA.type);
+        assertEquals(0, entryA.offset);
+        assertEquals(first.length, entryA.compressedSize);
+        assertEquals(first.length, entryA.originalSize); // no separate field: same as compressed
+        assertArrayEquals(first, reader.read(entryA));
+
+        NsArchiveReader.Entry entryB = reader.find("image\\bg\\b.jpg");
+        assertNotNull(entryB);
+        assertEquals(first.length, entryB.offset); // packed immediately after entry A
+        assertArrayEquals(second, reader.read(entryB));
+    }
+
+    @Test
+    public void openSarLookupIsCaseInsensitiveAndMissingPathReturnsNull() throws IOException {
+        File archive = buildSyntheticSar(new String[]{"image\\bg\\a.jpg"}, new byte[][]{{1, 2, 3}});
+        NsArchiveReader reader = NsArchiveReader.openSar(archive);
+        assertNotNull(reader.find("IMAGE\\BG\\A.JPG"));
+        assertNull(reader.find("image\\bg\\does_not_exist.jpg"));
+    }
+
+    @Test
+    public void openSarNbzNamedEntryThrowsRatherThanGuessing() throws IOException {
+        // Real ONScripter-EN's SAR reader infers NBZ compression purely from a ".nbz" filename
+        // suffix (no per-entry compression-type byte to read one from, unlike .nsa) -- this reader
+        // doesn't decode NBZ, so it must still refuse to hand back raw compressed bytes as if they
+        // were the real asset, the same way an unsupported .nsa compression type already does.
+        File archive = buildSyntheticSar(new String[]{"image\\bg\\a.nbz"}, new byte[][]{{1, 2, 3}});
+        NsArchiveReader reader = NsArchiveReader.openSar(archive);
+        NsArchiveReader.Entry entry = reader.find("image\\bg\\a.nbz");
+        assertNotNull(entry);
+        assertThrows(UnsupportedOperationException.class, () -> reader.read(entry));
+    }
+
+    private File buildSyntheticSar(String[] entryPaths, byte[][] contents) throws IOException {
+        java.io.ByteArrayOutputStream headerEntries = new java.io.ByteArrayOutputStream();
+        for (int i = 0; i < entryPaths.length; i++) {
+            byte[] nameBytes = entryPaths[i].getBytes(java.nio.charset.Charset.forName("Shift_JIS"));
+            headerEntries.write(nameBytes);
+            headerEntries.write(0);
+            long offset = 0;
+            for (int j = 0; j < i; j++) {
+                offset += contents[j].length;
+            }
+            writeUnsignedInt(headerEntries, offset);
+            writeUnsignedInt(headerEntries, contents[i].length);
+        }
+
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        writeUnsignedShort(out, entryPaths.length);
+        int baseOffset = 6 + headerEntries.size();
+        writeUnsignedInt(out, baseOffset);
+        out.write(headerEntries.toByteArray());
+        for (byte[] content : contents) {
+            out.write(content);
+        }
+
+        File file = File.createTempFile("ns_archive_reader_test", ".sar");
+        file.deleteOnExit();
+        try (java.io.FileOutputStream fos = new java.io.FileOutputStream(file)) {
+            fos.write(out.toByteArray());
+        }
+        return file;
     }
 }

@@ -1156,12 +1156,25 @@ public class ReaderActivity extends AppCompatActivity implements VnEngine.Listen
 
     @Override
     public void onChoices(List<String> options) {
-        runOnUiThread(() -> showChoices(options, null));
+        runOnUiThread(() -> showChoices(options, null, null, null, null));
     }
 
     @Override
     public void onChoices(List<String> options, List<File> images) {
-        runOnUiThread(() -> showChoices(options, images));
+        runOnUiThread(() -> showChoices(options, images, null, null, null));
+    }
+
+    @Override
+    public void onChoices(List<String> options, List<File> images,
+                           List<VnEngine.SpriteTransparency> imageTransparencies, List<Integer> imageAlphaMaskCells) {
+        runOnUiThread(() -> showChoices(options, images, imageTransparencies, imageAlphaMaskCells, null));
+    }
+
+    @Override
+    public void onChoices(List<String> options, List<File> images,
+                           List<VnEngine.SpriteTransparency> imageTransparencies, List<Integer> imageAlphaMaskCells,
+                           List<int[]> imageCropRects) {
+        runOnUiThread(() -> showChoices(options, images, imageTransparencies, imageAlphaMaskCells, imageCropRects));
     }
 
     @Override
@@ -1313,16 +1326,40 @@ public class ReaderActivity extends AppCompatActivity implements VnEngine.Listen
      *                {@code null} (the whole list, or an individual entry) when there's no image to
      *                show -- always the case for a VNDS choice. An option with an image gets a
      *                split layout (image on the left half, text on the right half) instead of the
-     *                plain text button every other option still gets. */
-    private void showChoices(List<String> options, List<File> images) {
+     *                plain text button every other option still gets.
+     * @param imageTransparencies parallel to {@code images}, each image's own real transparency tag
+     *                (see {@link VnEngine.Listener#onChoices(List, List, List, List)}) -- {@code
+     *                null} (the whole list) falls back to {@link VnEngine.SpriteTransparency#OPAQUE}
+     *                for every image, same as an untagged/unknown source.
+     * @param imageCropRects parallel to {@code images}, a {@code {srcX, srcY, w, h}} sub-rectangle
+     *                to crop out of the paired image instead of showing it whole (see {@link
+     *                VnEngine.Listener#onChoices(List, List, List, List, List)}) -- an NScripter
+     *                plain "btn" button's ENTIRE visible appearance, unlike "spbtn"/"exbtn". Shown
+     *                image-only (see {@link #buildCroppedImageChoiceButton}), never split with a
+     *                separate text label, since the crop already has any real label baked in as
+     *                art. {@code null} (an entry, or the whole list) means "show the paired image
+     *                whole" -- the case for every OTHER button-registering command. */
+    private void showChoices(List<String> options, List<File> images,
+                              List<VnEngine.SpriteTransparency> imageTransparencies, List<Integer> imageAlphaMaskCells,
+                              List<int[]> imageCropRects) {
         currentChoiceOptions = new ArrayList<>(options);
         choicesPanel.removeAllViews();
         for (int i = 0; i < options.size(); i++) {
             final int index = i;
             File imageFile = images != null && index < images.size() ? images.get(index) : null;
-            View button = imageFile != null && imageFile.isFile()
-                    ? buildImageChoiceButton(options.get(i), imageFile)
-                    : buildTextChoiceButton(options.get(i));
+            VnEngine.SpriteTransparency transparency = imageTransparencies != null && index < imageTransparencies.size()
+                    ? imageTransparencies.get(index) : VnEngine.SpriteTransparency.OPAQUE;
+            int alphaMaskCells = imageAlphaMaskCells != null && index < imageAlphaMaskCells.size()
+                    ? imageAlphaMaskCells.get(index) : 1;
+            int[] cropRect = imageCropRects != null && index < imageCropRects.size() ? imageCropRects.get(index) : null;
+            View button;
+            if (imageFile != null && imageFile.isFile() && cropRect != null) {
+                button = buildCroppedImageChoiceButton(options.get(i), imageFile, transparency, alphaMaskCells, cropRect);
+            } else if (imageFile != null && imageFile.isFile()) {
+                button = buildImageChoiceButton(options.get(i), imageFile, transparency, alphaMaskCells);
+            } else {
+                button = buildTextChoiceButton(options.get(i));
+            }
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             lp.topMargin = dp(8);
@@ -1341,36 +1378,50 @@ public class ReaderActivity extends AppCompatActivity implements VnEngine.Listen
         choicesPanel.setVisibility(View.VISIBLE);
     }
 
+    /** Shared "no press animation, standard choice-button background" e-ink chrome applied to
+     * every choice button variant (plain text, image+text split, cropped-image-only) -- a real
+     * Android ripple/elevation press animation is exactly the kind of continuous-motion effect
+     * this app's e-ink no-animation policy forbids everywhere, not just for text buttons. {@link
+     * Button} is clickable/focusable by default, but a raw {@link ImageView}/{@link LinearLayout}
+     * used as a button (the image-choice variants below) is not -- setting both explicitly here
+     * too is harmless where they're already true. */
+    private void applyChoiceButtonChrome(View view) {
+        view.setBackground(ContextCompat.getDrawable(this, R.drawable.bg_choice_button));
+        view.setStateListAnimator(null);
+        view.setElevation(0f);
+        view.setClickable(true);
+        view.setFocusable(true);
+    }
+
     private Button buildTextChoiceButton(String text) {
         Button button = new Button(this);
         button.setText(text);
         button.setAllCaps(false);
         button.setTextColor(ContextCompat.getColorStateList(this, R.color.choice_button_text));
-        button.setBackground(ContextCompat.getDrawable(this, R.drawable.bg_choice_button));
-        button.setStateListAnimator(null); // no press elevation animation
-        button.setElevation(0f);
+        applyChoiceButtonChrome(button);
         return button;
     }
 
     /** A choice button for an NScripter image-sprite button, split evenly down the middle: the
      * button's own image on the left half, its text label on the right half -- rather than the
-     * plain centered text {@link #buildTextChoiceButton} renders for every other choice. */
-    private View buildImageChoiceButton(String text, File imageFile) {
+     * plain centered text {@link #buildTextChoiceButton} renders for every other choice. {@code
+     * transparency}/{@code alphaMaskCells} get the image the same real compositing (see {@link
+     * #loadBitmap(String, VnEngine.SpriteTransparency, int)}) an ordinary sprite showing this same
+     * file would already get -- an alpha-mask cutout or color-keyed transparent background, not a
+     * raw untreated rectangle. */
+    private View buildImageChoiceButton(String text, File imageFile,
+                                         VnEngine.SpriteTransparency transparency, int alphaMaskCells) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setBackground(ContextCompat.getDrawable(this, R.drawable.bg_choice_button));
-        row.setStateListAnimator(null); // no press elevation animation
-        row.setElevation(0f);
-        row.setClickable(true);
-        row.setFocusable(true);
+        applyChoiceButtonChrome(row);
 
         ImageView imageView = new ImageView(this);
         imageView.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         imageView.setAdjustViewBounds(true);
         imageView.setMaxHeight(dp(72));
         imageView.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        imageView.setImageBitmap(loadBitmap(imageFile.getAbsolutePath()));
+        imageView.setImageBitmap(loadBitmap(imageFile.getAbsolutePath(), transparency, alphaMaskCells));
 
         TextView textView = new TextView(this);
         LinearLayout.LayoutParams textLp =
@@ -1384,6 +1435,52 @@ public class ReaderActivity extends AppCompatActivity implements VnEngine.Listen
         row.addView(imageView);
         row.addView(textView);
         return row;
+    }
+
+    /** A choice button for a plain NScripter "btn"-registered button (see {@link
+     * VnEngine.Listener#onChoices(List, List, List, List, List)}): unlike {@link
+     * #buildImageChoiceButton}'s image+separate-text split layout, this shows ONLY the {@code
+     * cropRect} crop of the shared "btndef" image -- that crop already IS the button's complete
+     * real visual (any label is baked into the art itself, the same as a real ONScripter build
+     * shows), so pairing it with a second, separately-rendered text label would be redundant at
+     * best and visually wrong at worst. Falls back to a plain text button if the underlying image
+     * fails to decode (a corrupt/missing asset -- the same tolerance a missing/bad sprite file
+     * already gets elsewhere in this class). */
+    private View buildCroppedImageChoiceButton(String text, File imageFile, VnEngine.SpriteTransparency transparency,
+                                                int alphaMaskCells, int[] cropRect) {
+        Bitmap full = loadBitmap(imageFile.getAbsolutePath(), transparency, alphaMaskCells);
+        Bitmap cropped = full == null ? null : cropBitmap(full, cropRect[0], cropRect[1], cropRect[2], cropRect[3]);
+        if (cropped == null) {
+            return buildTextChoiceButton(text);
+        }
+
+        ImageView imageView = new ImageView(this);
+        imageView.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        imageView.setAdjustViewBounds(true);
+        imageView.setMaxHeight(dp(72));
+        imageView.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        imageView.setPadding(dp(4), dp(4), dp(4), dp(4));
+        applyChoiceButtonChrome(imageView);
+        imageView.setImageBitmap(cropped);
+        return imageView;
+    }
+
+    /** Clamps {@code (x,y,w,h)} to {@code full}'s own real decoded bounds before cropping -- real
+     * ONScripter-EN's own btnCommand does the same clamp against the loaded "btndef" image's actual
+     * dimensions (see ONScripterLabel_command.cpp), since a script's declared rectangle isn't
+     * guaranteed to fit inside whatever that asset actually decoded to. Returns {@code null} (never
+     * {@code full} itself, which would show the WHOLE unrelated button sheet for this one button)
+     * when the clamped rectangle collapses to nothing. */
+    private Bitmap cropBitmap(Bitmap full, int x, int y, int w, int h) {
+        int clampedX = Math.max(0, Math.min(x, full.getWidth()));
+        int clampedY = Math.max(0, Math.min(y, full.getHeight()));
+        int clampedW = Math.max(0, Math.min(w, full.getWidth() - clampedX));
+        int clampedH = Math.max(0, Math.min(h, full.getHeight() - clampedY));
+        if (clampedW <= 0 || clampedH <= 0) {
+            return null;
+        }
+        return Bitmap.createBitmap(full, clampedX, clampedY, clampedW, clampedH);
     }
 
     private int dp(int value) {

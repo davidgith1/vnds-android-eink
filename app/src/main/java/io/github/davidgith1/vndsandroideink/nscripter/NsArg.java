@@ -9,7 +9,8 @@ package io.github.davidgith1.vndsandroideink.nscripter;
 public final class NsArg {
 
     public enum Kind {
-        /** A "quoted string" literal; {@link #value} has the surrounding quotes stripped. */
+        /** A "quoted string" or `backtick string` literal (NScripter's two equivalent string
+         * delimiters); {@link #value} has the surrounding quotes/backticks stripped. */
         STRING_LITERAL,
         /** A %-prefixed numeric-variable reference or expression, e.g. "%3", "%cnt+1". */
         NUM_VAR_EXPR,

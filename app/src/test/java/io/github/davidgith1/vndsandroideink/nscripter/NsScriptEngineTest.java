@@ -1,6 +1,7 @@
 package io.github.davidgith1.vndsandroideink.nscripter;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -69,6 +70,248 @@ public class NsScriptEngineTest {
         engine.resumeFromTap(); // past EOF: finished
         assertTrue(listener.finished);
         assertEquals(VnEngine.State.FINISHED, engine.getState());
+    }
+
+    @Test
+    public void selectStillCollectsItsOptionListAcrossABlankLine() throws IOException {
+        // A real, observed pattern (Instant Death! Panda Samurai's own title-screen "select"s):
+        // "select" on its own bare line, THEN a blank line, THEN the "\"text\",*label,..."
+        // continuation -- e.g. "select\n\n\"` Start \",*ppa,\n\"` Postscript \",*kou". Before
+        // NsCommandDispatcher.collectSelectPairs skipped over blank continuation lines, the very
+        // first blank line right after a bare "select" made it stop collecting immediately (before
+        // consuming any real option), leaving the "\"text\",*label" lines to fall through to the
+        // normal per-line dispatch loop as their own separate statements -- which aren't a
+        // recognized command, so they were shown as raw, unparsed dialogue (literally
+        // "\"` Start \",*ppa" printed on screen) instead of ever presenting a real choice menu.
+        write(String.join("\n",
+                "*start",
+                "select",
+                "",
+                "\"Go left\",*left,",
+                "\"Go right\",*right",
+                "*left",
+                "mov %1,1",
+                "goto *done",
+                "*right",
+                "mov %1,2",
+                "*done",
+                "The end\\",
+                ""));
+        FakeListener listener = new FakeListener();
+        NsScriptEngine engine = new NsScriptEngine(tmp.getRoot(), listener, new java.util.HashMap<>());
+
+        engine.start();
+        assertEquals(VnEngine.State.WAITING_CHOICE, engine.getState());
+        assertEquals(java.util.Arrays.asList("Go left", "Go right"), listener.lastChoices);
+
+        engine.choose(1); // "Go right" -> *right -> mov %1,2 -> falls through to *done
+        assertEquals("2", engine.getVariablesSnapshot().get("%1"));
+        assertEquals("The end", listener.textLines.get(0));
+    }
+
+    @Test
+    public void selgosubJumpsViaGosubAndReturnComesBackRightAfterTheWholeBlock() throws IOException {
+        // Real ONScripter-EN's "selgosub" (see NsCommandDispatcher's handler and
+        // NsExecState.pendingChoiceIsGosub's doc): unlike "select"'s plain one-way jump, the chosen
+        // option's label is reached via "gosub", so its own "return" comes back to right after the
+        // whole (possibly multi-line, backtick-quoted) selgosub block -- the real-world idiom this
+        // supports is a scene's own "already viewed -- skip?" menu repeated throughout a script,
+        // where either branch needs to fall back into the same continuing flow. Before "selgosub"
+        // was implemented, it was an unrecognized mnemonic that silently no-op'd, and its own
+        // continuation line (starting with a backtick, not a command mnemonic) read as literal
+        // garbage dialogue instead of ever presenting a real choice.
+        write(String.join("\n",
+                "*start",
+                "mov %1,99",
+                "selgosub `1. Option A`,*optA,",
+                "\t`2. Option B`,*optB",
+                "The end\\",
+                "goto *done",
+                "*optA",
+                "mov %1,1",
+                "return",
+                "*optB",
+                "mov %1,2",
+                "return",
+                "*done",
+                ""));
+        FakeListener listener = new FakeListener();
+        NsScriptEngine engine = new NsScriptEngine(tmp.getRoot(), listener, new java.util.HashMap<>());
+
+        engine.start();
+        assertEquals(VnEngine.State.WAITING_CHOICE, engine.getState());
+        assertEquals(2, listener.lastChoices.size());
+        assertEquals("1. Option A", listener.lastChoices.get(0));
+        assertEquals("2. Option B", listener.lastChoices.get(1));
+
+        engine.choose(0); // "Option A" -> gosub *optA -> mov %1,1 -> return -> right after the block
+        assertEquals(VnEngine.State.WAITING_TAP, engine.getState());
+        assertEquals("1", engine.getVariablesSnapshot().get("%1"));
+        assertEquals("The end", listener.textLines.get(listener.textLines.size() - 1));
+    }
+
+    /** Mirrors a real, very common Tsukihime idiom (repeated dozens of times, once per scene):
+     * "if %sceneskip==1 && %viewed==1 skip 4 / gosub *scene / mov %viewed,1 / skip N /
+     * <already-viewed-prompt via selgosub> / skip 3 / *afterprompt / return" -- %900/%901 stand in
+     * for %sceneskip/%viewed here (real script "numalias"-declares those, which this hand-written
+     * fixture doesn't bother with; a bare unregistered name would resolve to variable slot 0 for
+     * BOTH, aliasing them together -- see NsExpr.resolveIndex's tolerant fallback). Real
+     * Tsukihime's own copy of this idiom uses "skip 9" for N; this test's own line spacing differs
+     * slightly, hence "skip 8" below -- the exact count is just "however many lines separate this
+     * skip from the line right after the whole prompt block," not a fixed constant. First time
+     * through (either the scene hasn't been viewed yet, or the player hasn't turned on auto-skip),
+     * the scene plays normally and the "already viewed" prompt never appears at all -- the trailing
+     * "skip" jumps past the whole prompt block. See both this and {@link
+     * #skipJumpsStraightIntoTheAlreadyViewedPromptWhenBothConditionsAreTrue} together: before
+     * "skip" was implemented, the guard on line 1 always fell through as if it had never fired
+     * (an unrecognized mnemonic silently no-ops), so the prompt below appeared unconditionally on
+     * every single visit -- first time or not, auto-skip on or not. */
+    @Test
+    public void skipJumpsPastTheAlreadyViewedPromptOnAFreshFirstTimeVisit() throws IOException {
+        write(String.join("\n",
+                "*start",
+                "mov %900,0",
+                "mov %901,0",
+                "if %900==1 && %901==1 skip 4",
+                "gosub *scene",
+                "mov %901,1",
+                "skip 8",
+                "`You have already viewed this scene.",
+                "`Would you like to skip?",
+                "selgosub `1. Skip`,*afterprompt,",
+                "\t`2. Don't skip`,*scene",
+                "skip 3",
+                "*afterprompt",
+                "return",
+                "Continuing story.\\",
+                "goto *done",
+                "*scene",
+                "Scene content.\\",
+                "return",
+                "*done",
+                ""));
+        FakeListener listener = new FakeListener();
+        NsScriptEngine engine = new NsScriptEngine(tmp.getRoot(), listener, new java.util.HashMap<>());
+
+        engine.start();
+        // The scene subroutine ran for real (its own line showed) ...
+        assertTrue(listener.textLines.contains("Scene content."));
+        engine.resumeFromTap();
+        // ... and the "already viewed" prompt never appeared -- straight through to the next line.
+        assertEquals(VnEngine.State.WAITING_TAP, engine.getState());
+        assertEquals("Continuing story.", listener.textLines.get(listener.textLines.size() - 1));
+        assertEquals("1", engine.getVariablesSnapshot().get("%901"));
+    }
+
+    @Test
+    public void skipJumpsStraightIntoTheAlreadyViewedPromptWhenBothConditionsAreTrue() throws IOException {
+        write(String.join("\n",
+                "*start",
+                "mov %900,1",
+                "mov %901,1",
+                "if %900==1 && %901==1 skip 4",
+                "gosub *scene",
+                "mov %901,1",
+                "skip 9",
+                "`You have already viewed this scene.",
+                "`Would you like to skip?",
+                "selgosub `1. Skip`,*afterprompt,",
+                "\t`2. Don't skip`,*scene",
+                "skip 3",
+                "*afterprompt",
+                "return",
+                "Continuing story.\\",
+                "goto *done",
+                "*scene",
+                "Scene content.\\",
+                "return",
+                "*done",
+                ""));
+        FakeListener listener = new FakeListener();
+        NsScriptEngine engine = new NsScriptEngine(tmp.getRoot(), listener, new java.util.HashMap<>());
+
+        engine.start();
+        // Landed directly on the prompt -- the scene subroutine was NOT re-run this time.
+        assertFalse(listener.textLines.contains("Scene content."));
+        assertEquals(VnEngine.State.WAITING_CHOICE, engine.getState());
+        assertEquals("You have already viewed this scene.Would you like to skip?",
+                String.join("", listener.textLines));
+        assertEquals(2, listener.lastChoices.size());
+        assertEquals("1. Skip", listener.lastChoices.get(0));
+        assertEquals("2. Don't skip", listener.lastChoices.get(1));
+
+        engine.choose(0); // "Skip" -> gosub *afterprompt -> return -> right after the "skip 3" line
+        assertEquals(VnEngine.State.WAITING_TAP, engine.getState());
+        assertEquals("Continuing story.", listener.textLines.get(listener.textLines.size() - 1));
+        assertFalse("the scene must still not have been replayed", listener.textLines.contains("Scene content."));
+    }
+
+    @Test
+    public void aBlockingWaitMidChainResumesTheRestOfThatSameLineNotTheNextOne() throws IOException {
+        // Mirrors a real, very common confirm-dialog idiom (real ONScripter-EN's own script cursor
+        // reads character-by-character, not line-by-line, so a mid-chain "wait" resumes into
+        // whatever's chained after it on the SAME line -- see NsExecState.pendingChainRemainder's
+        // doc): "gosub *windowoff:mov %1,1:wait 500:mov %1,2:goto *done". Before this was fixed,
+        // NsCommandDispatcher.executeChain's own "state changed -> stop" check couldn't tell a
+        // genuine jump (goto/gosub/select, whose destination correctly supersedes the rest of the
+        // old line) apart from a same-position block like "wait" -- so as soon as "wait" flipped
+        // runState to WAITING_DELAY, the rest of the chain ("mov %1,2:goto *done") was silently
+        // dropped, and resuming just fell through to whatever the NEXT unrelated script line was.
+        // A real-world instance: a "Yes, quit" confirmation's Yes branch is exactly this shape
+        // ("...:wait 500:end"/"...:wait 500:reset") -- pressing Yes visibly faded out and then
+        // just kept running the story instead of ever actually quitting/resetting.
+        write(String.join("\n",
+                "*start",
+                "mov %1,1",
+                "if %1==1 mov %1,1:wait 500:mov %1,2:goto *done",
+                "mov %1,99", // dead code if the chain resumes correctly; would run if it doesn't
+                "*done",
+                "The end\\",
+                ""));
+        FakeListener listener = new FakeListener();
+        NsScriptEngine engine = new NsScriptEngine(tmp.getRoot(), listener, new java.util.HashMap<>());
+        engine.setDelaysEnabled(true);
+
+        engine.start();
+        assertEquals(VnEngine.State.WAITING_DELAY, engine.getState());
+        assertEquals("1", engine.getVariablesSnapshot().get("%1")); // "mov %1,1" already ran
+
+        engine.resumeFromDelay();
+        assertEquals(VnEngine.State.WAITING_TAP, engine.getState());
+        // "mov %1,2" (chained AFTER "wait") and the "goto *done" jump both ran -- not "mov %1,99".
+        assertEquals("2", engine.getVariablesSnapshot().get("%1"));
+        assertEquals("The end", listener.textLines.get(0));
+    }
+
+    @Test
+    public void aGosubEmbeddedMidChainResumesTheRestOfThatSameLineOnceItsSubroutineReturns() throws IOException {
+        // The OTHER half of the real "*check_reset"/"*check_end" confirm-dialog idiom (see the
+        // "wait"-mid-chain test above): "gosub *windowoff:textoff:...:wait 500:end" -- here the
+        // BLOCKING command isn't what's mid-chain, the "gosub" itself is, and it's a real jump, not
+        // an in-place block. Before NsExecState.callStackChainRemainder existed,
+        // NsCommandDispatcher.executeChain's "state.pc changed -> stop" check fired the instant
+        // "gosub" jumped, discarding "mov %2,99:end" outright -- so once *sub's own "return" popped
+        // back, the engine just fell through to the next unrelated physical line, and the user's
+        // real report ("return to title" / "close the game" Yes button doing neither) was exactly
+        // this: the fade-out subroutine ran, then the story just kept playing.
+        write(String.join("\n",
+                "*start",
+                "mov %1,1",
+                "if %1==1 gosub *fadeout:mov %2,99:end",
+                "mov %2,7", // dead code if the chain resumes correctly; would run if it doesn't
+                "*fadeout",
+                "mov %3,1",
+                "return",
+                ""));
+        FakeListener listener = new FakeListener();
+        NsScriptEngine engine = new NsScriptEngine(tmp.getRoot(), listener, new java.util.HashMap<>());
+
+        engine.start();
+        // "gosub *fadeout" ran (mov %3,1), "return" popped back into the middle of the original
+        // chain, "mov %2,99" ran, and "end" halted the run loop -- not "mov %2,7".
+        assertEquals("1", engine.getVariablesSnapshot().get("%3"));
+        assertEquals("99", engine.getVariablesSnapshot().get("%2"));
+        assertTrue(listener.exitedToLibrary);
     }
 
     @Test

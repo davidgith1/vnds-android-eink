@@ -128,4 +128,26 @@ public class NsTokenizerTest {
         assertEquals(NsArg.Kind.STRING_LITERAL, args.get(1).kind);
         assertEquals("file.ogg", args.get(1).value);
     }
+
+    @Test
+    public void parseArgsTreatsBacktickAsAStringDelimiterLikeDoubleQuote() {
+        // Real ONScripter-EN's ScriptHandler::parseStr reads a `backtick string` exactly like a
+        // "quoted string" -- a literal run up to its matching close, commas and all. A real
+        // Tsukihime "select" line ("select `Yes, I agree to all three terms.`, *termsagree, ...")
+        // used to have its embedded comma split the option text in two, corrupting both the
+        // displayed choice text and the label that followed it.
+        List<NsArg> args = NsTokenizer.parseArgs("`Yes, I agree to all three terms.`,*termsagree");
+        assertEquals(2, args.size());
+        assertEquals(NsArg.Kind.STRING_LITERAL, args.get(0).kind);
+        assertEquals("Yes, I agree to all three terms.", args.get(0).value);
+        assertEquals(NsArg.Kind.BAREWORD, args.get(1).kind);
+        assertEquals("*termsagree", args.get(1).value);
+    }
+
+    @Test
+    public void stripTrailingCommentIgnoresASemicolonInsideABacktickString() {
+        NsLine line = NsTokenizer.classify("`Wait; don't go.`;a real trailing comment");
+        assertEquals(NsLine.Type.STATEMENT, line.type);
+        assertEquals("`Wait; don't go.`", line.text);
+    }
 }

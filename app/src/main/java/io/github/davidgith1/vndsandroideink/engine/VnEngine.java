@@ -104,6 +104,36 @@ public interface VnEngine {
         default void onChoices(List<String> options, List<File> images) {
             onChoices(options);
         }
+        /** Same menu as {@link #onChoices(List, List)}, plus -- parallel to {@code images}, same
+         * size -- each image's own real transparency tag and (only meaningful when the paired
+         * transparency is {@link SpriteTransparency#ALPHA_MASK}) alpha-mask cell count, exactly the
+         * pair {@link #onSprite} already gets for an ordinary sprite: a button's image IS just the
+         * layer's "lsp"-loaded sprite (see {@code NsCommandDispatcher}'s "spbtn" handler), so it
+         * needs the same real compositing (an ":a;" cutout, a ":l;"/untagged color-key, or a flat
+         * ":c;" opaque crop) a host would already apply if that same image were shown via {@link
+         * #onSprite} directly -- not a raw, untreated rectangle. Meaningless (but always populated,
+         * to keep index alignment) wherever the paired {@code images} entry is {@code null}.
+         * Defaults to forwarding to the 2-arg overload for hosts that don't care. */
+        default void onChoices(List<String> options, List<File> images,
+                                List<SpriteTransparency> imageTransparencies, List<Integer> imageAlphaMaskCells) {
+            onChoices(options, images);
+        }
+        /** Same menu as {@link #onChoices(List, List, List, List)}, plus -- parallel to {@code
+         * images}, same size, individual entries possibly {@code null} -- a {@code {srcX, srcY, w,
+         * h}} sub-rectangle to crop out of the paired image instead of showing it whole. NScripter's
+         * plain "btn no,x,y,w,h,srcX,srcY" idiom (see {@code NsCommandDispatcher}'s "btn" handler)
+         * has no per-button sprite of its own at all -- a button's ENTIRE visible appearance is a
+         * crop of one shared "btndef"-loaded image, at exactly this rectangle, real ONScripter-EN's
+         * own btnCommand copies out of it. {@code null} (an entry, or the whole list) means "show
+         * the paired image whole, uncropped" -- the case for every OTHER button-registering command
+         * ("spbtn"/"exbtn", which tag a whole per-layer sprite; "cselbtn", which has no image at
+         * all). Defaults to forwarding to the 4-arg overload (ignoring the crop, showing the
+         * uncropped "btndef" image instead) for hosts that don't care. */
+        default void onChoices(List<String> options, List<File> images,
+                                List<SpriteTransparency> imageTransparencies, List<Integer> imageAlphaMaskCells,
+                                List<int[]> imageCropRects) {
+            onChoices(options, images, imageTransparencies, imageAlphaMaskCells);
+        }
         /** Only invoked when the host has real delays enabled; see {@link #setDelaysEnabled}. */
         void onDelay(int frames);
         /** Invoked whenever a persistent global variable changes, so the host can persist it. */
