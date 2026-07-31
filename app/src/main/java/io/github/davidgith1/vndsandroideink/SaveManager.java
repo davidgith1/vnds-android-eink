@@ -77,9 +77,16 @@ public final class SaveManager {
         public final List<SpriteEntry> sprites;
         public final String lastSpeaker;
         public final List<SavedLine> bodyLines;
+        /** Whether this slot was captured while a choice menu was on screen (engine state
+         * WAITING_CHOICE) -- if so, {@link #choiceOptions} holds the options to redisplay and
+         * {@link #pc} points just past the "choice" line, ready for {@link
+         * io.github.davidgith1.vndsandroideink.vnds.ScriptEngine#restoreStateAtChoice}. */
+        public final boolean atChoice;
+        public final List<String> choiceOptions;
 
         SlotData(String file, int pc, Map<String, String> vars, String backgroundPath, String musicPath,
-                 List<SpriteEntry> sprites, String lastSpeaker, List<SavedLine> bodyLines) {
+                 List<SpriteEntry> sprites, String lastSpeaker, List<SavedLine> bodyLines,
+                 boolean atChoice, List<String> choiceOptions) {
             this.file = file;
             this.pc = pc;
             this.vars = vars;
@@ -88,6 +95,8 @@ public final class SaveManager {
             this.sprites = sprites;
             this.lastSpeaker = lastSpeaker;
             this.bodyLines = bodyLines;
+            this.atChoice = atChoice;
+            this.choiceOptions = choiceOptions;
         }
     }
 
@@ -171,6 +180,18 @@ public final class SaveManager {
     public static void save(Context context, String vnKey, int slot, ScriptEngine engine,
                              String backgroundPath, String musicPath, List<SpriteEntry> sprites,
                              String lastSpeaker, List<SavedLine> bodyLines) {
+        save(context, vnKey, slot, engine, backgroundPath, musicPath, sprites, lastSpeaker, bodyLines,
+                false, new ArrayList<>());
+    }
+
+    /** @param atChoice whether the engine was paused on a choice menu (state WAITING_CHOICE) at
+     *                  save time, rather than a plain WAITING_TAP; if so {@code choiceOptions}
+     *                  must hold the currently-displayed options so they can be redisplayed on load.
+     * @param choiceOptions the choice menu's option texts when {@code atChoice}; ignored otherwise. */
+    public static void save(Context context, String vnKey, int slot, ScriptEngine engine,
+                             String backgroundPath, String musicPath, List<SpriteEntry> sprites,
+                             String lastSpeaker, List<SavedLine> bodyLines, boolean atChoice,
+                             List<String> choiceOptions) {
         try {
             JSONObject vars = new JSONObject();
             for (Map.Entry<String, String> e : engine.getVariablesSnapshot().entrySet()) {
@@ -191,6 +212,10 @@ public final class SaveManager {
                 lineJson.put("b", line.bold);
                 linesJson.put(lineJson);
             }
+            JSONArray choiceOptionsJson = new JSONArray();
+            for (String option : choiceOptions) {
+                choiceOptionsJson.put(option);
+            }
 
             String speaker = lastSpeaker == null ? "" : lastSpeaker;
             String lastLine = bodyLines.isEmpty() ? "" : bodyLines.get(bodyLines.size() - 1).text;
@@ -205,6 +230,8 @@ public final class SaveManager {
                     .putString(key(vnKey, slot, "sprites"), spritesJson.toString())
                     .putString(key(vnKey, slot, "lastSpeaker"), speaker)
                     .putString(key(vnKey, slot, "lines"), linesJson.toString())
+                    .putBoolean(key(vnKey, slot, "atChoice"), atChoice)
+                    .putString(key(vnKey, slot, "choiceOptions"), choiceOptionsJson.toString())
                     .putString(key(vnKey, slot, "preview"), preview)
                     .putLong(key(vnKey, slot, "timestamp"), System.currentTimeMillis())
                     .apply();
@@ -249,7 +276,14 @@ public final class SaveManager {
                 lines.add(new SavedLine(lineJson.getString("t"), lineJson.getBoolean("b")));
             }
 
-            return new SlotData(file, pc, vars, bg, music, sprites, lastSpeaker, lines);
+            boolean atChoice = p.getBoolean(key(vnKey, slot, "atChoice"), false);
+            List<String> choiceOptions = new ArrayList<>();
+            JSONArray choiceOptionsJson = new JSONArray(p.getString(key(vnKey, slot, "choiceOptions"), "[]"));
+            for (int i = 0; i < choiceOptionsJson.length(); i++) {
+                choiceOptions.add(choiceOptionsJson.getString(i));
+            }
+
+            return new SlotData(file, pc, vars, bg, music, sprites, lastSpeaker, lines, atChoice, choiceOptions);
         } catch (JSONException e) {
             return null;
         }
