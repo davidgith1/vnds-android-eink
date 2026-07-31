@@ -95,6 +95,15 @@ public interface VnEngine {
         void onSound(File soundFileOrNull, int times);
         void onMusic(File musicFileOrNull);
         void onChoices(List<String> options);
+        /** Same menu as {@link #onChoices(List)}, plus -- parallel to {@code options}, same size,
+         * individual entries possibly {@code null} -- the button-sprite image (if any) NScripter's
+         * "spbtn"/"exbtn" idiom loaded for that option (see {@code NsCommandDispatcher}'s "lsp"/
+         * "spbtn" handlers), so a host that wants to render the real button graphic rather than a
+         * plain text fallback can. Defaults to forwarding to the text-only overload for hosts (and
+         * VNDS, which never has button images) that don't care. */
+        default void onChoices(List<String> options, List<File> images) {
+            onChoices(options);
+        }
         /** Only invoked when the host has real delays enabled; see {@link #setDelaysEnabled}. */
         void onDelay(int frames);
         /** Invoked whenever a persistent global variable changes, so the host can persist it. */

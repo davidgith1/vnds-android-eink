@@ -36,9 +36,13 @@ public class ScriptEngine implements VnEngine {
      * literal text: when present, both the opening and closing brace are consumed along with the
      * reference and replaced by the plain value, never left behind in the output. Whichever
      * alternative matches, the name stops at the first character that isn't a
-     * letter/digit/underscore. */
+     * letter/digit/underscore -- except for an optional trailing "[digits]" (e.g. "$strS[1000]",
+     * seen in real packs like Kanon using a fixed numeric slot as a scratch string register), which
+     * is captured as part of the name since {@code setvar} stores it as one literal key including
+     * the brackets (real scripts only ever use a fixed literal index there, never a nested/computed
+     * one, so a plain digit suffix is all real-world interop needs). */
     private static final Pattern VAR_REFERENCE =
-            Pattern.compile("\\{\\$([A-Za-z_][A-Za-z0-9_]*)\\}|\\$([A-Za-z_][A-Za-z0-9_]*)");
+            Pattern.compile("\\{\\$([A-Za-z_][A-Za-z0-9_]*(?:\\[\\d+\\])?)\\}|\\$([A-Za-z_][A-Za-z0-9_]*(?:\\[\\d+\\])?)");
 
     /** "bgload"'s documented default fade length, in frames, when no fadetime argument is given. */
     private static final int DEFAULT_BGLOAD_FADE_FRAMES = 16;
@@ -319,6 +323,7 @@ public class ScriptEngine implements VnEngine {
 
     /** "bgload file [fadetime]": fadetime is in frames at 60fps, defaulting to 16 when omitted. */
     private void handleBgload(String rest) {
+        rest = substituteVariables(rest);
         String[] tokens = rest.split("\\s+");
         String file = tokens[0];
         int fadeFrames = tokens.length > 1 ? parseIntSafe(tokens[1], DEFAULT_BGLOAD_FADE_FRAMES) : DEFAULT_BGLOAD_FADE_FRAMES;
@@ -336,6 +341,7 @@ public class ScriptEngine implements VnEngine {
      * seen in sample VNDS packs), so foreground layers are only ever cleared by bgload.
      */
     private void handleSetimg(String rest) {
+        rest = substituteVariables(rest);
         String[] tokens = rest.split("\\s+");
         String file = tokens[0];
         if (file.equals("~")) {
@@ -348,6 +354,7 @@ public class ScriptEngine implements VnEngine {
 
     /** "sound file times": times may be a repeat count, or -1 for infinite looping. */
     private void handleSound(String rest) {
+        rest = substituteVariables(rest);
         String[] tokens = rest.split("\\s+");
         String file = tokens[0];
         if (file.equals("~")) {
@@ -359,6 +366,7 @@ public class ScriptEngine implements VnEngine {
     }
 
     private void handleMusic(String rest) {
+        rest = substituteVariables(rest);
         String[] tokens = rest.split("\\s+");
         String file = tokens[0];
         if (file.equals("~")) {
@@ -421,7 +429,14 @@ public class ScriptEngine implements VnEngine {
         }
         String name = tokens[0];
         String op = tokens[1];
-        String value = tokens[2];
+        String rawValue = tokens[2];
+        // A double-quoted value is always a literal (see stripWrappingQuotes's own doc) -- never
+        // resolved as a variable reference, even if its unquoted text happens to match one.
+        boolean quoted = rawValue.length() >= 2 && rawValue.startsWith("\"") && rawValue.endsWith("\"");
+        String value = stripWrappingQuotes(rawValue);
+        if (!quoted) {
+            value = resolveBarewordVariable(value);
+        }
         switch (op) {
             case "=":
                 target.put(name, value);
@@ -436,6 +451,21 @@ public class ScriptEngine implements VnEngine {
                 // Unrecognized modifier: ignore, consistent with unknown commands elsewhere.
                 break;
         }
+    }
+
+    /** Real packs commonly (though not always -- numeric values never are) wrap a "setvar"/
+     * "gsetvar" string value in double quotes (e.g. {@code setvar strS[1000] = "BG003B.jpg"},
+     * {@code gsetvar ccblue = "\x1b[34;1m"}), the same way a quoted string literal works
+     * everywhere else in the format ({@code choice}'s options, etc.) -- stored verbatim including
+     * the quote characters themselves, this silently corrupted every use of that variable (e.g. a
+     * "bgload"'d filename literally becoming {@code "BG003B.jpg"} with the quotes as part of the
+     * path, which can never exist on disk). Only strips a quote pair that wraps the WHOLE value,
+     * never quotes appearing mid-value. */
+    private String stripWrappingQuotes(String value) {
+        if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
+            return value.substring(1, value.length() - 1);
+        }
+        return value;
     }
 
     private void handleRandom(String rest) {
@@ -511,6 +541,30 @@ public class ScriptEngine implements VnEngine {
         return value != null ? value : "0";
     }
 
+    /** Resolves a bareword (no "$" prefix) operand that real VNDS engines apparently
+     * auto-dereference as a variable reference despite the format's own general "$"-prefix
+     * documentation -- confirmed for "if"/"fi" against real VNDSx 1.4.9 (a right-hand comparison
+     * operand: "1 == varthatissetto1" evaluates true when that variable holds 1; see this class's
+     * own VNDS-format doc excerpt), and evidenced for "setvar"/"gsetvar" by real packs that only
+     * make sense if it holds there too -- e.g. Ever17's "setvar v_b3 = selected2" (copying one
+     * plain variable into another, both barewords) and Never7's several "setvar v_a1_08 =
+     * selected" (copying the "selected" pseudo-variable {@code choice} sets), both of which are
+     * central to that script's own branching and clearly intended to carry the source variable's
+     * value, not the literal source name. Only resolved when {@code token} is the exact, whole
+     * name of a variable that has actually been assigned somewhere (setvar or gsetvar) --
+     * otherwise it's left as a literal string, so an ordinary literal comparison/assignment (e.g.
+     * "if name == John Smith", "setvar name = John Smith", or against a plain number) still works
+     * exactly as before. */
+    private String resolveBarewordVariable(String token) {
+        if (variables.containsKey(token)) {
+            return variables.get(token);
+        }
+        if (globals.containsKey(token)) {
+            return globals.get(token);
+        }
+        return token;
+    }
+
     private boolean evalCondition(String rest) {
         // Limit 3: the compared value is everything after "name op ", not just its first
         // whitespace-delimited token -- a value like "if name == John Smith" must compare against
@@ -521,7 +575,7 @@ public class ScriptEngine implements VnEngine {
         }
         String varName = tokens[0];
         String op = tokens[1];
-        String value = tokens[2];
+        String value = resolveBarewordVariable(tokens[2]);
         String actual = lookupVariable(varName);
         int cmp;
         try {
@@ -565,6 +619,7 @@ public class ScriptEngine implements VnEngine {
     }
 
     private void handleJump(String rest) {
+        rest = substituteVariables(rest);
         String[] tokens = rest.split("\\s+");
         String file = tokens[0];
         String label = tokens.length > 1 ? tokens[1] : null;
