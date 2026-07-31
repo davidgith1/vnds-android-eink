@@ -159,6 +159,23 @@ public class ScriptEngine implements VnEngine {
         state = State.WAITING_TAP;
     }
 
+    /**
+     * Like {@link #restoreState}, but resumes a previously-saved {@code WAITING_CHOICE} pause
+     * (a save made while a choice menu was on screen) instead of {@code WAITING_TAP} --
+     * re-invokes {@link Listener#onChoices} with {@code options} so the host redisplays the same
+     * menu. {@code savedPc} already points just past the "choice" line (see {@link
+     * #handleChoice}, which advances {@code pc} before setting {@code WAITING_CHOICE}), so {@link
+     * #choose(int)} resumes exactly where it would have without the save/load round-trip.
+     */
+    public void restoreStateAtChoice(String fileName, int savedPc, Map<String, String> vars, List<String> options) {
+        loadFile(fileName);
+        this.pc = Math.max(0, Math.min(savedPc, lines.size()));
+        variables.clear();
+        variables.putAll(vars);
+        state = State.WAITING_CHOICE;
+        listener.onChoices(new ArrayList<>(options));
+    }
+
     public void resumeFromTap() {
         if (state == State.WAITING_TAP) {
             state = State.RUNNING;

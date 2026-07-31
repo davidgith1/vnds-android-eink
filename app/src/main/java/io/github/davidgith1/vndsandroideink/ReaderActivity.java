@@ -112,6 +112,13 @@ public class ReaderActivity extends AppCompatActivity implements VnEngine.Listen
     private String currentMusicPath = null;
     private boolean finished = false;
 
+    /** The options of the choice menu currently on screen, or null when none is -- kept so a save
+     * taken mid-choice (engine state WAITING_CHOICE) can persist what to redisplay on load; see
+     * {@link #showChoices} (where it's set) and {@link #saveToSlot}/{@link #loadFromSlot}. Only
+     * consulted for the VNDS engine -- NScripter's own save format tracks this internally (see
+     * {@code NsScriptEngine.Snapshot}'s {@code lastChoice*} fields). */
+    private List<String> currentChoiceOptions = null;
+
     /** Set for the duration of {@link #advanceToNextChoice}: suppresses sound effects and
      * intermediate music cues, and forces images/text to apply instantly (no fade/typewriter),
      * regardless of e-ink mode -- see the listener methods below and {@link #showImage}/
@@ -1301,10 +1308,6 @@ public class ReaderActivity extends AppCompatActivity implements VnEngine.Listen
         return layout.getHeight() > bodyBudgetPx;
     }
 
-    private void showChoices(List<String> options) {
-        showChoices(options, null);
-    }
-
     /** @param images parallel to {@code options}, an NScripter "spbtn"/"exbtn" button-sprite's own
      *                image file per option (see {@link VnEngine.Listener#onChoices(List, List)}),
      *                {@code null} (the whole list, or an individual entry) when there's no image to
@@ -1312,6 +1315,7 @@ public class ReaderActivity extends AppCompatActivity implements VnEngine.Listen
      *                split layout (image on the left half, text on the right half) instead of the
      *                plain text button every other option still gets. */
     private void showChoices(List<String> options, List<File> images) {
+        currentChoiceOptions = new ArrayList<>(options);
         choicesPanel.removeAllViews();
         for (int i = 0; i < options.size(); i++) {
             final int index = i;
@@ -1326,6 +1330,7 @@ public class ReaderActivity extends AppCompatActivity implements VnEngine.Listen
             button.setOnClickListener(v -> {
                 recordActivity();
                 choicesPanel.setVisibility(View.GONE);
+                currentChoiceOptions = null;
                 engine.choose(index);
                 scheduleAutoAdvance();
             });
@@ -1587,7 +1592,7 @@ public class ReaderActivity extends AppCompatActivity implements VnEngine.Listen
     }
 
     private void openSaveDialog() {
-        if (engine == null || engine.getState() != VnEngine.State.WAITING_TAP) {
+        if (!canResumeNow()) {
             Toast.makeText(this, R.string.save_unavailable, Toast.LENGTH_SHORT).show();
             // The menu that led here already froze Auto-advance/media/pending delays via
             // openOverlay(); since no dialog is opening after all, nothing else will ever
@@ -1639,9 +1644,15 @@ public class ReaderActivity extends AppCompatActivity implements VnEngine.Listen
     /** Whether the engine's current state is consistent enough to actually capture a save/resume
      * snapshot right now -- same requirement {@link #openSaveDialog} already enforces for a manual
      * save. Used both to gate the auto-resume snapshot in {@link #onPause} and to warn before
-     * leaving the reader (Library/Quit) at a moment that wouldn't be resumable. */
+     * leaving the reader (Library/Quit) at a moment that wouldn't be resumable. WAITING_CHOICE
+     * counts as resumable too, same as WAITING_TAP: {@link #saveToSlot}/{@link #loadFromSlot}
+     * persist and redisplay the choice menu itself, not just the position right before it. */
     private boolean canResumeNow() {
-        return !finished && engine != null && engine.getState() == VnEngine.State.WAITING_TAP;
+        if (finished || engine == null) {
+            return false;
+        }
+        VnEngine.State state = engine.getState();
+        return state == VnEngine.State.WAITING_TAP || state == VnEngine.State.WAITING_CHOICE;
     }
 
     private void saveToSlot(int slot) {
@@ -1649,6 +1660,7 @@ public class ReaderActivity extends AppCompatActivity implements VnEngine.Listen
         for (BodyLine line : bodyLines) {
             saved.add(new SaveManager.SavedLine(line.text, line.bold));
         }
+        boolean atChoice = engine.getState() == VnEngine.State.WAITING_CHOICE;
         if (nsEngineActive) {
             List<NsSaveManager.NsSpriteEntry> spriteEntries = new ArrayList<>();
             for (Map.Entry<Integer, SpriteInstance> e : nsSprites.entrySet()) {
@@ -1657,14 +1669,17 @@ public class ReaderActivity extends AppCompatActivity implements VnEngine.Listen
                         s.alphaMaskCells));
             }
             NsSaveManager.save(this, vnKey(), slot, (NsScriptEngine) engine, currentBgPath, currentBgTransparency,
-                    currentBgAlphaCells, currentMusicPath, spriteEntries, lastSpeaker, saved);
+                    currentBgAlphaCells, currentMusicPath, spriteEntries, lastSpeaker, saved, atChoice);
             return;
         }
         List<SaveManager.SpriteEntry> spriteEntries = new ArrayList<>();
         for (SpriteInstance s : sprites) {
             spriteEntries.add(new SaveManager.SpriteEntry(s.x, s.y, s.path));
         }
-        SaveManager.save(this, vnKey(), slot, (ScriptEngine) engine, currentBgPath, currentMusicPath, spriteEntries, lastSpeaker, saved);
+        List<String> choiceOptions = atChoice && currentChoiceOptions != null
+                ? currentChoiceOptions : new ArrayList<>();
+        SaveManager.save(this, vnKey(), slot, (ScriptEngine) engine, currentBgPath, currentMusicPath, spriteEntries,
+                lastSpeaker, saved, atChoice, choiceOptions);
     }
 
     private void loadFromSlot(int slot) {
@@ -1697,7 +1712,11 @@ public class ReaderActivity extends AppCompatActivity implements VnEngine.Listen
         }
 
         restoreBodyAndTextLog(data.lastSpeaker, data.bodyLines);
-        engine.restoreState(data.file, data.pc, data.vars);
+        if (data.atChoice) {
+            ((ScriptEngine) engine).restoreStateAtChoice(data.file, data.pc, data.vars, data.choiceOptions);
+        } else {
+            engine.restoreState(data.file, data.pc, data.vars);
+        }
         scheduleAutoAdvance();
     }
 
@@ -1731,7 +1750,11 @@ public class ReaderActivity extends AppCompatActivity implements VnEngine.Listen
         }
 
         restoreBodyAndTextLog(data.lastSpeaker, data.bodyLines);
-        ((NsScriptEngine) engine).restoreFromSnapshot(data.engineState);
+        NsScriptEngine nsEngine = (NsScriptEngine) engine;
+        nsEngine.restoreFromSnapshot(data.engineState);
+        if (data.atChoice) {
+            nsEngine.reshowLastChoiceMenu();
+        }
         scheduleAutoAdvance();
     }
 
@@ -1744,6 +1767,7 @@ public class ReaderActivity extends AppCompatActivity implements VnEngine.Listen
         delayDeadlineElapsed = -1;
         delayRemainingMsAtPause = -1;
         choicesPanel.setVisibility(View.GONE);
+        currentChoiceOptions = null;
         autoButton.setVisibility(View.VISIBLE);
         textLogButton.setVisibility(View.VISIBLE);
         advanceToChoiceButton.setVisibility(View.VISIBLE);

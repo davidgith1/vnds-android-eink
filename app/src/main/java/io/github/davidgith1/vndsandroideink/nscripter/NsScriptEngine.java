@@ -181,6 +181,15 @@ public final class NsScriptEngine implements VnEngine {
          * the restored save's own already-loaded image/music still showed fine since those come
          * from the save's literal saved paths, not a fresh resolve. */
         public final String nsaDir;
+        /** See {@link NsExecState#lastChoiceOptionTexts}/{@code lastChoiceLabels}/{@code
+         * lastChoiceBtnwaitVarIndex}/{@code lastChoiceButtonIds} -- carried through a save/load
+         * round-trip (a fresh {@link NsExecState} otherwise has none of this) purely so a slot
+         * saved while WAITING_CHOICE can restore that menu via {@link #reshowLastChoiceMenu()}
+         * after {@link #restoreFromSnapshot}; null/empty when no choice has ever been shown. */
+        public final List<String> lastChoiceOptionTexts;
+        public final List<String> lastChoiceLabels;
+        public final Integer lastChoiceBtnwaitVarIndex;
+        public final List<Integer> lastChoiceButtonIds;
 
         public Snapshot(int pc, Map<Integer, Long> numVars, Map<Integer, String> strVars,
                          Map<String, Integer> numAliases, Map<String, Integer> strAliases,
@@ -210,6 +219,16 @@ public final class NsScriptEngine implements VnEngine {
                          List<Integer> callStack, boolean pendingPageClearOnResume,
                          String pendingDialogueRemainder, Map<String, String> barewordConstants,
                          String nsaDir) {
+            this(pc, numVars, strVars, numAliases, strAliases, callStack, pendingPageClearOnResume,
+                    pendingDialogueRemainder, barewordConstants, nsaDir, null, null, null, null);
+        }
+
+        public Snapshot(int pc, Map<Integer, Long> numVars, Map<Integer, String> strVars,
+                         Map<String, Integer> numAliases, Map<String, Integer> strAliases,
+                         List<Integer> callStack, boolean pendingPageClearOnResume,
+                         String pendingDialogueRemainder, Map<String, String> barewordConstants,
+                         String nsaDir, List<String> lastChoiceOptionTexts, List<String> lastChoiceLabels,
+                         Integer lastChoiceBtnwaitVarIndex, List<Integer> lastChoiceButtonIds) {
             this.pc = pc;
             this.numVars = numVars;
             this.strVars = strVars;
@@ -220,6 +239,10 @@ public final class NsScriptEngine implements VnEngine {
             this.pendingDialogueRemainder = pendingDialogueRemainder;
             this.barewordConstants = barewordConstants;
             this.nsaDir = nsaDir == null ? "" : nsaDir;
+            this.lastChoiceOptionTexts = lastChoiceOptionTexts;
+            this.lastChoiceLabels = lastChoiceLabels;
+            this.lastChoiceBtnwaitVarIndex = lastChoiceBtnwaitVarIndex;
+            this.lastChoiceButtonIds = lastChoiceButtonIds;
         }
     }
 
@@ -227,7 +250,11 @@ public final class NsScriptEngine implements VnEngine {
         return new Snapshot(state.pc, new HashMap<>(state.numVars), new HashMap<>(state.strVars),
                 new HashMap<>(state.numAliases), new HashMap<>(state.strAliases),
                 new ArrayList<>(state.callStack), state.pendingPageClearOnResume,
-                state.pendingDialogueRemainder, new HashMap<>(state.barewordConstants), state.nsaDir);
+                state.pendingDialogueRemainder, new HashMap<>(state.barewordConstants), state.nsaDir,
+                state.lastChoiceOptionTexts == null ? null : new ArrayList<>(state.lastChoiceOptionTexts),
+                state.lastChoiceLabels == null ? null : new ArrayList<>(state.lastChoiceLabels),
+                state.lastChoiceBtnwaitVarIndex,
+                state.lastChoiceButtonIds == null ? null : new ArrayList<>(state.lastChoiceButtonIds));
     }
 
     /** The counterpart to {@link #snapshotState()} -- like {@link #restoreState}, repositions
@@ -257,6 +284,10 @@ public final class NsScriptEngine implements VnEngine {
         }
         state.pendingPageClearOnResume = snapshot.pendingPageClearOnResume;
         state.pendingDialogueRemainder = snapshot.pendingDialogueRemainder;
+        state.lastChoiceOptionTexts = snapshot.lastChoiceOptionTexts == null ? null : new ArrayList<>(snapshot.lastChoiceOptionTexts);
+        state.lastChoiceLabels = snapshot.lastChoiceLabels == null ? null : new ArrayList<>(snapshot.lastChoiceLabels);
+        state.lastChoiceBtnwaitVarIndex = snapshot.lastChoiceBtnwaitVarIndex;
+        state.lastChoiceButtonIds = snapshot.lastChoiceButtonIds == null ? null : new ArrayList<>(snapshot.lastChoiceButtonIds);
         state.runState = State.WAITING_TAP;
     }
 

@@ -169,6 +169,9 @@ public final class GuideDialog {
             if (checkpoint.label != null) {
                 body.addView(sectionCaption(context, checkpoint.label));
             }
+            if (checkpoint.createsSaveId != null) {
+                body.addView(smallCaption(context, "Create save here -- Slot " + checkpoint.createsSaveId, dp(context, 4)));
+            }
             for (GuideManager.Choice choice : checkpoint.choices) {
                 body.addView(buildCheckRow(context, vnKey, choice.key, choice.label, choice.detail, null));
             }
